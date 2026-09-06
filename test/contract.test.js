@@ -109,3 +109,42 @@ test("market bridge env overrides take effect; baseUrl trailing slashes are stri
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
   }
 });
+
+test("hostLogPath/remotePort defaults point at the dsh-desktop host contract", () => {
+  const saved = { ...process.env };
+  try {
+    delete process.env.DSH_GUARD_HOST_LOG;
+    delete process.env.DSH_GUARD_PORT;
+    process.env.APPDATA = "C:\\Users\\tester\\AppData\\Roaming";
+    assert.equal(contract.hostLogPath(), join("C:\\Users\\tester\\AppData\\Roaming", "dsh-desktop", "host-last.log"));
+    // APPDATA missing: still a joined path; readHostLog nulls on a missing file (T2).
+    delete process.env.APPDATA;
+    assert.equal(contract.hostLogPath(), join("dsh-desktop", "host-last.log"));
+    assert.equal(contract.remotePort(), 3080);
+    assert.equal(typeof contract.remotePort(), "number");
+  } finally {
+    for (const k of Object.keys(saved)) process.env[k] = saved[k];
+    // also delete keys this test added: --test-isolation=none shares one process
+    // across files, and a leaked DSH_GUARD_* override would break default tests.
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  }
+});
+
+test("hostLogPath/remotePort env overrides take effect; blank env falls back", () => {
+  const saved = { ...process.env };
+  try {
+    process.env.DSH_GUARD_HOST_LOG = "C:\\custom\\host-last.log";
+    process.env.DSH_GUARD_PORT = "9090";
+    assert.equal(contract.hostLogPath(), "C:\\custom\\host-last.log");
+    assert.equal(contract.remotePort(), 9090);
+    // envStr semantics: a blank override falls back to the default
+    process.env.DSH_GUARD_PORT = "   ";
+    assert.equal(contract.remotePort(), 3080);
+    process.env.DSH_GUARD_HOST_LOG = "";
+    process.env.APPDATA = "C:\\Users\\tester\\AppData\\Roaming";
+    assert.equal(contract.hostLogPath(), join("C:\\Users\\tester\\AppData\\Roaming", "dsh-desktop", "host-last.log"));
+  } finally {
+    for (const k of Object.keys(saved)) process.env[k] = saved[k];
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  }
+});
