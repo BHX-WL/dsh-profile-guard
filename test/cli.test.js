@@ -306,3 +306,101 @@ test("install verification fails when a stopped host does not go down", async ()
   assert.equal(r.stopFailed, true);
   assert.match(r.error, /did not stop/);
 });
+
+// I1 (final review): a post-install boot verification that ended in bootOnce's
+// auto-rollback must surface as a FAILED install (exit 1) with a rollback
+// message — never as "install ok", even when bootRollbackResult reports
+// ok:true (the host is back up on the healthy snapshot, but the just-installed
+// plugin did NOT stick). postInstallOutcome is the pure decision the install
+// branch applies; the helper lives in cli.js so the branch stays untestable
+// (production-only spawn) while the decision is pinned.
+test("postInstallOutcome treats a rolled-back boot verification as install failure", async () => {
+  const { postInstallOutcome } = await import("../lib/cli.js");
+  // host recovered on the healthy snapshot (ok:true) but the plugin was removed -> still exit 1
+  const rolled = postInstallOutcome({ ok: true, rolledBack: true, snapshotId: "S9" });
+  assert.equal(rolled.exitCode, 1);
+  assert.match(rolled.message, /rolled back to healthy snapshot S9/);
+  assert.match(rolled.message, /plugin removed/);
+  // rolled back AND the host failed to recover -> exit 1 with the reason
+  const broke = postInstallOutcome({ ok: false, rolledBack: true, snapshotId: "S9", error: "restart failed" });
+  assert.equal(broke.exitCode, 1);
+  assert.match(broke.message, /did not recover/);
+  assert.match(broke.message, /restart failed/);
+  // a clean verification (plugin booted, no rollback) stays an install ok
+  const clean = postInstallOutcome({ ok: true, snapshotId: "s1" });
+  assert.equal(clean.exitCode, 0);
+  assert.equal(clean.message, null);
+  // verification failed without a rollback (no healthy snapshot) -> exit 1, no rollback claim
+  const failed = postInstallOutcome({ ok: false, error: "host did not become ready" });
+  assert.equal(failed.exitCode, 1);
+  assert.match(failed.message, /host did not become ready/);
+});
+
+
+// S1 (final review, regression): a registry fetch leaves undici handles that
+// need to wind down before the CLI exits. On Windows a direct process.exit()
+// in that window trips a libuv fail-fast abort ("Assertion failed:
+// !(handle->flags & UV_HANDLE_CLOSING) ... exit 0xC0000409", reproduced 3/3
+// against the real npmmirror registry on the pre-fix CLI). The local keep-alive
+// server below keeps the connection open after the response — the same
+// lifecycle as a real registry round trip — and the child CLI must still exit
+// 0 (ok) / 1 (refused) cleanly with no libuv assertion on stderr. This pins
+// the natural-exit rule for the network commands.
+test("preflight after a real keep-alive registry fetch exits 0 cleanly (S1 regression)", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-s1-")); try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    const srv = createServer((req, res) => {
+      // keep-alive server: respond then LEAVE the connection open, exactly like
+      // a real registry's idle keep-alive socket after the manifest response.
+      if (req.url === "/keep-pkg/latest") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ name: "keep-pkg", version: "1.0.0", dependencies: { diff: "^5.0.0" } })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    srv.keepAliveTimeout = 120000; // do not reap the connection while the child runs
+    await new Promise((r) => srv.listen(0, r)); const port = srv.address().port;
+    try {
+      const r0 = await run(["preflight", "keep-pkg", "--profile", "web", "--registry", "http://127.0.0.1:" + port], { DSH_HOME: h });
+      assert.equal(r0.code, 0, "ok path: expected exit 0, stderr=" + r0.stderr);
+      assert.match(r0.stdout, /preflight ok/);
+      assert.doesNotMatch(r0.stderr, /Assertion failed|libuv|0xC0000409/);
+      // refused path (core-shadow, no --force) must also exit 1 cleanly
+      const srv2 = createServer((req, res) => {
+        if (req.url === "/evil2/latest") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ name: "evil2", version: "1.0.0", dependencies: { "@deepseek-ai/dsh-tools": "0.0.1-rc.1" } })); }
+        else { res.statusCode = 404; res.end("{}"); }
+      });
+      srv2.keepAliveTimeout = 120000;
+      await new Promise((r) => srv2.listen(0, r)); const port2 = srv2.address().port;
+      try {
+        const r1 = await run(["preflight", "evil2", "--profile", "web", "--registry", "http://127.0.0.1:" + port2], { DSH_HOME: h });
+        assert.equal(r1.code, 1, "refused path: expected exit 1, stderr=" + r1.stderr);
+        assert.match(r1.stderr, /preflight refused|shadows the host/i);
+        assert.doesNotMatch(r1.stderr, /Assertion failed|libuv|0xC0000409/);
+      } finally { srv2.close(); }
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+// I2 (final review): `guard check` carries the host-contract probe (design
+// §11.5-2). The probe result must NEVER drive the check exit code — contract
+// drift is a warning, profile health decides 0/1. With no live-host
+// observation site attached yet (observedContract() returns {}), a healthy
+// profile produces no contract warning and exits 0; an unhealthy profile still
+// exits 1 with no contract line either way (the mismatch path itself is pinned
+// by test/contract.test.js).
+test("check wires the contract probe without changing the health exit code (I2)", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-i2-")); try {
+    // healthy profile -> exit 0, no contract warning on stderr
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    const ok = await run(["check", "--profile", "web"], { DSH_HOME: h });
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.match(ok.stdout, /profile web: healthy/);
+    assert.doesNotMatch(ok.stderr, /host contract/);
+    // unhealthy profile (unresolvable bundle) -> exit 1, still no contract line
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: ["ghost-pkg"] } } }));
+    const bad = await run(["check", "--profile", "web"], { DSH_HOME: h });
+    assert.equal(bad.code, 1, bad.stderr);
+    assert.match(bad.stdout, /profile web:/);
+    assert.doesNotMatch(bad.stderr, /host contract/);
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});

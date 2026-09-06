@@ -46,3 +46,35 @@ test("checkHostContract reports mismatches without throwing", () => {
   assert.ok(Array.isArray(r));
   assert.ok(r.some((x) => x.name === "C2-boot-marker" && x.ok === false && x.observed === "NOPE"));
 });
+
+test("an empty DSH_GUARD_FAIL_TEXT override falls back to the default texts (M1: no empty boot regex)", () => {
+  const saved = { ...process.env };
+  try {
+    // env override present but parsing to an empty list must not yield []:
+    // isPluginFailure builds RegExp(texts.join("|")) from this and an empty
+    // alternation would match every boot log (arming rollback on anything).
+    process.env.DSH_GUARD_FAIL_TEXT = ";;";
+    assert.deepEqual(contract.pluginFailureTexts(), ["plugin tree failed", "host preparation failed", "Cannot find module", "SyntaxError"]);
+    process.env.DSH_GUARD_FAIL_TEXT = ";  ; ";
+    assert.deepEqual(contract.pluginFailureTexts(), ["plugin tree failed", "host preparation failed", "Cannot find module", "SyntaxError"]);
+  } finally {
+    for (const k of Object.keys(saved)) process.env[k] = saved[k];
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  }
+});
+
+test("checkHostContract reports no drift when nothing was observed (C5 must not warn on absent input)", () => {
+  // No observed input means "no claim": every probe compares the contract to
+  // itself and must come back ok — C2 does this via ?? expected; C5 must not
+  // fall back to an empty observed string (that produced a spurious
+  // C5-fail-texts warning on every `guard check`, I2).
+  const r = contract.checkHostContract();
+  assert.ok(Array.isArray(r));
+  assert.equal(r.length, 3);
+  for (const c of r) assert.equal(c.ok, true, JSON.stringify(c));
+});
+
+test("checkHostContract reports C5 drift when observed fail texts differ", () => {
+  const r = contract.checkHostContract({ failTexts: ["new failure wording"] });
+  assert.ok(r.some((x) => x.name === "C5-fail-texts" && x.ok === false && x.observed === "new failure wording"));
+});
