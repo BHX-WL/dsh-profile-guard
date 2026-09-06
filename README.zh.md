@@ -44,8 +44,8 @@ node lib/cli.js check
 | `guard check [--profile <name>]` | 只读健康检查。退出码 0 = 健康，1 = 发现问题。 |
 | `guard watch [--profile <name>]` | 常驻自动快照：监听 `package.json` / `pnpm-lock.yaml`，变更时自动快照。Ctrl+C 或 SIGTERM 退出。 |
 | `guard preflight <pkg> [--force]` | 安装前检查：拒绝生产依赖遮蔽宿主 @deepseek-ai 命名空间的包，以及宿主无法满足其 dsh engine 要求的包。退出码 0 = 安全，1 = 拒绝，`--force` 覆盖 core-shadow 检查。 |
-| `guard install <pkg> [--force] [--no-boot]` | Preflight → 快照 → `dsh plugin add` → 激活：纯 insert 插件经 market toggle 免重启热挂；其余形状或 toggle 失败则回退启动验证（失败自动回滚）。一条命令，闭环完成。 |
-| `guard hotmount <pkg> [--profile <name>]` | 对已装插件免重启触发热挂载——install 装后激活的独立命令形态。仅纯 insert 插件符合；无重启回退，形状不符或 toggle 失败会打印原因并退出 1。 |
+| `guard install <pkg> [--force] [--no-boot]` | Preflight → 快照 → `dsh plugin add` → 激活：纯 insert 或 client-only 插件经 market toggle 免重启热挂；不支持的形状或 toggle 失败则回退启动验证（失败自动回滚）。一条命令，闭环完成。 |
+| `guard hotmount <pkg> [--profile <name>]` | 对已装插件免重启触发热挂载——install 装后激活的独立命令形态。仅纯 insert 或 client-only 插件符合；无重启回退，不支持的形状或 toggle 失败会打印原因并退出 1。 |
 
 不带参数运行 `guard`（或 `guard help`）会打印用法。
 
@@ -96,7 +96,7 @@ guard 运行在 dsh 宿主**之外**：lib 任何文件都不 import 宿主运�
 - 快照与报告不含凭据：恢复报告的自由文本字段在落盘前会脱敏（token、authorization 头、cookie、密码）。
 - `guard` 停宿主时只杀 3080 端口上命令行带 dsh 特征（`dsh`、`bin.js`、`deepseek`）的进程——绝不误杀占用该端口的无关进程。
 - `guard boot` 与 `guard restore` 会停止并重新启动你的**真实** dsh 宿主（3080 端口）。只在你能接受一次宿主重启的时段运行——例如桌面端空闲时段——绝不要在宿主自身服务的会话里运行。
-- 全部保持在本机、不做任何外部网络请求——唯独 `guard preflight` 与 `guard install` 例外：这两条会从 npm registry 拉取包 manifest（`guard install` 还会执行 `dsh plugin add` 下载并安装该包）。热挂只走 loopback：`guard install` 可能向本机 dsh-market toggle（`http://127.0.0.1:3080`）POST 以免重启激活纯 insert 插件，`guard hotmount` 按需做同样的事。
+- 全部保持在本机、不做任何外部网络请求——唯独 `guard preflight` 与 `guard install` 例外：这两条会从 npm registry 拉取包 manifest（`guard install` 还会执行 `dsh plugin add` 下载并安装该包）。热挂只走 loopback：`guard install` 可能向本机 dsh-market toggle（`http://127.0.0.1:3080`）POST 以免重启激活纯 insert 或 client-only 插件，`guard hotmount` 按需做同样的事。
 
 ## 测试
 
@@ -123,9 +123,9 @@ guard hotmount dsh-better-edit --profile web
 
 `guard preflight` 在安装任何东西之前，把包对照宿主做一次检查：`guard preflight dsh-better-edit --profile web` 会打印 `guard: preflight ok for dsh-better-edit (host <version>)` 并退出 0（其生产依赖不遮蔽宿主 `@deepseek-ai` 命名空间，dsh engine 要求宿主能满足或未声明任何要求）；`guard preflight @deepseek-ai/dsh-tools --profile web` 退出 1——`@deepseek-ai/dsh-tools` 本身是 core 包，把它当插件安装会遮蔽宿主 `@deepseek-ai` 命名空间。
 
-`guard hotmount dsh-better-edit --profile web` 对真实 market 执行热挂 toggle：market 接受时 guard 打印 `hot-mounted dsh-better-edit` 并退出 0；插件未安装或其 patch 非纯 insert 时，以原因退出 1（stderr）。对已处于 live 的插件重复 toggle 是幂等 no-op，因此在真实 profile 上试这条命令是安全的——但它确实会向本机 market（`127.0.0.1:3080`）POST，请在桌面端空闲时段运行。想不发请求只看效果，可在命令前加 `DSH_GUARD_DRY_HOTMOUNT=1`：它会打印 `[dry] would hot-mount dsh-better-edit`。
+`guard hotmount dsh-better-edit --profile web` 对真实 market 执行热挂 toggle：market 接受时 guard 打印 `hot-mounted dsh-better-edit` 并退出 0；插件未安装或其形状既非纯 insert 也非 client-only 时，以原因退出 1（stderr）。对已处于 live 的插件重复 toggle 是幂等 no-op，因此在真实 profile 上试这条命令是安全的——但它确实会向本机 market（`127.0.0.1:3080`）POST，请在桌面端空闲时段运行。想不发请求只看效果，可在命令前加 `DSH_GUARD_DRY_HOTMOUNT=1`：它会打印 `[dry] would hot-mount dsh-better-edit`。
 
-`guard install <pkg>` 与 `guard boot` 刻意不列在这里：`guard install` 会真实执行 `dsh plugin add` 并安装该包，随后激活它——纯 insert 插件经 market toggle 免重启热挂，其余情况做启动验证（可能停止并重启你的真实宿主）；`guard boot` 顾名思义会重启宿主。请在桌面端空闲时段亲自运行，绝不要在宿主自身服务的会话里运行。
+`guard install <pkg>` 与 `guard boot` 刻意不列在这里：`guard install` 会真实执行 `dsh plugin add` 并安装该包，随后激活它——纯 insert 或 client-only 插件经 market toggle 免重启热挂，不支持的形状则做启动验证（可能停止并重启你的真实宿主）；`guard boot` 顾名思义会重启宿主。请在桌面端空闲时段亲自运行，绝不要在宿主自身服务的会话里运行。
 
 ## 许可证
 
