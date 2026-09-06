@@ -76,3 +76,16 @@ test("duplicate insert ids flagged", () => {
     });
   } finally { rmSync(h, { recursive: true, force: true }); }
 });
+
+test("stale cordis copy in node_modules/@deepseek-ai flagged as core-shadow", () => {
+  const h = makeHome();
+  try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    pkg(dir, { dependencies: {}, dsh: { profile: { bundles: [] } } });
+    mkdirSync(join(dir, "node_modules", "@deepseek-ai", "cordis"), { recursive: true });
+    withDshHome(h, () => {
+      const r = staticCheck("web");
+      assert.ok(r.problems.some((p) => p.code === "core-shadow"), JSON.stringify(r.problems));
+    });
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
