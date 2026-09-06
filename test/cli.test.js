@@ -18,6 +18,7 @@ import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from "node
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runPostInstallVerify } from "../lib/cli.js";
 
 const CLI = join(process.cwd(), "lib", "cli.js");
 
@@ -244,4 +245,64 @@ test("install rejects a core-shadow package before snapshotting", async () => {
       assert.equal(snaps.length, 0); // refused before any snapshot
     } finally { srv.close(); }
   } finally { rmSync(h, { recursive: true, force: true }); }
+});
+// --- install post-install verification: forced-restart sequencing (dry) ---
+// runPostInstallVerify is production-only from the CLI's perspective (the dry
+// gate stops install before the spawn), so these unit tests drive its three
+// seams (isHealthy/stopHost/boot) with fakes — no real host is ever probed,
+// stopped or spawned. They pin the review round-1 fix: install must force a
+// restart of an already-running host so the just-installed plugin actually
+// boots (or auto-rolls back), never a bootOnce alreadyRunning no-op.
+
+test("install verification stops a running host before booting it", async () => {
+  let up = true;
+  const calls = [];
+  const r = await runPostInstallVerify({
+    profile: "web",
+    settleMs: 1000,
+    isHealthy: async () => up,
+    stopHost: async () => { calls.push("stop"); up = false; return { killed: [1234], errors: [] }; },
+    boot: async () => { calls.push("boot"); return { ok: true, snapshotId: "s1" }; },
+  });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(calls, ["stop", "boot"]); // host was up -> stop first, then real boot
+});
+
+test("install verification boots directly when the host is already down", async () => {
+  const calls = [];
+  const r = await runPostInstallVerify({
+    profile: "web",
+    isHealthy: async () => false,
+    stopHost: async () => { calls.push("stop"); return { killed: [], errors: [] }; },
+    boot: async () => { calls.push("boot"); return { ok: true, snapshotId: "s2" }; },
+  });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(calls, ["boot"]); // host down -> no stop, bootOnce starts it
+});
+
+test("install verification fails when a running host cannot be stopped", async () => {
+  let booted = false;
+  const r = await runPostInstallVerify({
+    profile: "web",
+    isHealthy: async () => true,
+    stopHost: async () => ({ killed: [], errors: [{ stage: "netstat", error: "boom" }] }),
+    boot: async () => { booted = true; return { ok: true }; },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.stopFailed, true);
+  assert.equal(booted, false); // never reports ok against a host that was not restarted
+  assert.match(r.error, /netstat/);
+});
+
+test("install verification fails when a stopped host does not go down", async () => {
+  const r = await runPostInstallVerify({
+    profile: "web",
+    settleMs: 50,
+    isHealthy: async () => true, // host never goes down
+    stopHost: async () => ({ killed: [1234], errors: [] }),
+    boot: async () => { throw new Error("must not boot while the old host is still up"); },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.stopFailed, true);
+  assert.match(r.error, /did not stop/);
 });
