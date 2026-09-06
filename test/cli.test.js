@@ -108,6 +108,13 @@ test("show of an unknown id exits 1", async () => {
   }
 });
 
+test("restore without an id exits 2 with usage (no rollback attempted)", async () => {
+  // Dry guard: exits before rollbackToSnapshot, so nothing on 3080 is touched.
+  const r = await run(["restore"], {});
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /usage: guard restore/i);
+});
+
 test("snapshot of a missing profile exits 1 with an error", async () => {
   const h = mkdtempSync(join(tmpdir(), "guard-cli-"));
   try {
