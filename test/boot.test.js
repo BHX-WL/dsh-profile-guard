@@ -151,6 +151,9 @@ test("bootOnce rolls back to the latest healthy snapshot on a plugin-failure log
       assert.equal(r.rolledBack, true);
       assert.equal(r.snapshotId, snap.id);
       assert.deepEqual(readManifest(profileDir("web")), good); // manifest restored from snapshot
+      // the drained boot log is carried into the restore report as the crash reason (incidental #3)
+      assert.match(r.report, /## 崩溃原因/);
+      assert.match(r.report, /plugin tree failed to load/);
     });
   } finally { rmSync(h, { recursive: true, force: true }); }
 });

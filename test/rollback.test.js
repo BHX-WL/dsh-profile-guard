@@ -91,3 +91,22 @@ test("restartErrorOf reports an explicit reason when no host log tail exists", (
   assert.equal(restartErrorOf(null), fallback);
   assert.equal(restartErrorOf("Error: plugin tree failed to load"), "Error: plugin tree failed to load");
 });
+
+test("rollback carries crashReason into the restore report", async () => {
+  const h = makeHome();
+  try {
+    const good = { dependencies: { a: "1" }, dsh: { profile: { bundles: ["a"] } } };
+    makeProfile(h, "web", good);
+    await withHome(h, async () => {
+      const snap = await createSnapshot("web", { reason: "before bad", healthy: true });
+      const bad = { dependencies: { a: "1", evil: "1" }, dsh: { profile: { bundles: ["a", "evil"] } } };
+      writeFileSync(join(h, "profiles", "web", "package.json"), JSON.stringify(bad));
+      const r = await rollbackToSnapshot("web", snap.id, { autoRestart: false, stopPort: false, crashReason: "Error: plugin tree failed to load\n    at plugin.js:3" });
+      assert.equal(r.ok, true);
+      assert.match(r.report, /## 崩溃原因/);
+      assert.match(r.report, /plugin tree failed to load/);
+      const disk = readFileSync(join(h, "guards", "web", "last-report.md"), "utf8");
+      assert.match(disk, /plugin tree failed to load/);
+    });
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
