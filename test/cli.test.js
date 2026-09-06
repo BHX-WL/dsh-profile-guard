@@ -516,3 +516,131 @@ test("a failed fallback verification surfaces as exit 1 with the outcome message
   assert.ok(err.text().includes("hot-mount failed (market toggle request failed for hotplug-pkg: ECONNREFUSED); falling back to restart verification"), err.text());
   assert.ok(err.text().includes("install ok but boot verification failed: host did not become ready"), err.text());
 });
+
+// --- guard hotmount command (task 5, manual activation trigger) ---
+// A standalone `guard hotmount <pkg>` command - the manual counterpart to the
+// install-branch wiring in runPostAddHotMount: shape gate (canHotMountByShape)
+// then a real market toggle POST (tryHotMount). Exit contract: 0 hot-mounted /
+// 1 degraded, shape-refused or not-installed / 2 usage error. The real command
+// runs in a child process like every other CLI test; the market base/origin are
+// pointed at a LOCAL stub toggle server through the same env overrides
+// (DSH_GUARD_MARKET_BASE / DSH_GUARD_MARKET_ORIGIN) that contract.js reads in
+// production - no test ever POSTs to the real 3080. tryHotMount's own response
+// matrix is already pinned by test/mount.test.js (T3); here the CLI-level
+// contract (exit codes, streams, gate order, dry gate) is what is asserted.
+const HOTCLI_PKG = "hotcli-pkg";
+function writeInstalledPackage(home, profile, pkg, patchText) {
+  const dir = join(home, "profiles", profile, "node_modules", pkg);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: pkg }));
+  if (patchText !== null) writeFileSync(join(dir, "cordis.patch.yml"), patchText);
+}
+function toggleStub(handler) {
+  return new Promise((resolve) => {
+    const srv = createServer(handler);
+    srv.listen(0, () => resolve(srv));
+  });
+}
+
+test("hotmount without a package exits 2 with usage", async () => {
+  const r = await run(["hotmount"], {});
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /usage: guard hotmount <pkg>/);
+});
+
+test("hotmount reports a not-installed package with exit 1 and the reason", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-hm-")); try {
+    makeProfile(h, "web");
+    // nothing under node_modules/<pkg> -> readPatch null and no package.json
+    const r = await run(["hotmount", "ghost-pkg", "--profile", "web"], { DSH_HOME: h });
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stderr, /not installed/);
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("hotmount refuses a non-plain-insert patch with exit 1 and the shape reason", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-hm-")); try {
+    makeProfile(h, "web");
+    // patch carries a config row -> shape gate refuses BEFORE any market POST
+    writeInstalledPackage(h, "web", HOTCLI_PKG, "- insert:\n  name: x\n- config:\n  foo: bar\n");
+    const r = await run(["hotmount", HOTCLI_PKG, "--profile", "web"], { DSH_HOME: h });
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stderr, /hot-mount unavailable|plain inserts|restart required/i);
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("hotmount dry gate prints would-hot-mount, exits 0 and never POSTs", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-hm-")); try {
+    makeProfile(h, "web");
+    writeInstalledPackage(h, "web", HOTCLI_PKG, "- insert:\n  name: " + HOTCLI_PKG + "\n");
+    let hits = 0;
+    const srv = await toggleStub((req, res) => { hits++; res.statusCode = 500; res.end("{}"); });
+    const port = srv.address().port;
+    try {
+      const r = await run(["hotmount", HOTCLI_PKG, "--profile", "web"], {
+        DSH_HOME: h,
+        DSH_GUARD_DRY_HOTMOUNT: "1",
+        DSH_GUARD_MARKET_BASE: "http://127.0.0.1:" + port,
+        DSH_GUARD_MARKET_ORIGIN: "http://127.0.0.1:" + port,
+      });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /\[dry\] would hot-mount hotcli-pkg/);
+      assert.equal(hits, 0); // the dry gate must never POST to the market
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("hotmount mounts a shape-ok installed package and exits 0", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-hm-")); try {
+    makeProfile(h, "web");
+    writeInstalledPackage(h, "web", HOTCLI_PKG, "- insert:\n  id: " + HOTCLI_PKG + "\n  name: " + HOTCLI_PKG + "\n");
+    let method = null, url = null, reqBody = null;
+    const srv = await toggleStub((req, res) => {
+      method = req.method; url = req.url;
+      let b = "";
+      req.on("data", (ch) => { b += ch; });
+      req.on("end", () => {
+        reqBody = b;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ok: true, name: HOTCLI_PKG, enabled: true, activation: { [HOTCLI_PKG]: { state: "live", hot: true } } }));
+      });
+    });
+    const port = srv.address().port;
+    try {
+      const r = await run(["hotmount", HOTCLI_PKG, "--profile", "web"], {
+        DSH_HOME: h,
+        DSH_GUARD_MARKET_BASE: "http://127.0.0.1:" + port,
+        DSH_GUARD_MARKET_ORIGIN: "http://127.0.0.1:" + port,
+      });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /hot-mounted hotcli-pkg/);
+      assert.equal(method, "POST");
+      assert.equal(url, "/dsh-market/toggle");
+      assert.equal(JSON.parse(reqBody).name, HOTCLI_PKG);
+      assert.equal(JSON.parse(reqBody).enabled, true);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("hotmount degraded market toggle exits 1 with the reason", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-hm-")); try {
+    makeProfile(h, "web");
+    writeInstalledPackage(h, "web", HOTCLI_PKG, "- insert:\n  name: " + HOTCLI_PKG + "\n");
+    const srv = await toggleStub((req, res) => {
+      res.statusCode = 502;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: "market busy" }));
+    });
+    const port = srv.address().port;
+    try {
+      const r = await run(["hotmount", HOTCLI_PKG, "--profile", "web"], {
+        DSH_HOME: h,
+        DSH_GUARD_MARKET_BASE: "http://127.0.0.1:" + port,
+        DSH_GUARD_MARKET_ORIGIN: "http://127.0.0.1:" + port,
+      });
+      assert.equal(r.code, 1, r.stderr);
+      assert.match(r.stderr, /hot-mount failed/);
+      assert.match(r.stderr, /502/);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
