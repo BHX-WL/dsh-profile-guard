@@ -40,7 +40,7 @@ node lib/cli.js check
 | `guard snapshot [--profile <name>] [--reason "<note>"]` | 手动快照当前 profile 状态。装插件之前调用。 |
 | `guard list [--profile <name>]` | 列出快照：id、时间、原因、状态（`[healthy]` / `[pending]`）。 |
 | `guard show <id> [--profile <name>]` | 查看某份快照详情：bundles、依赖、hash。 |
-| `guard restore <id> [--no-auto-restart] [--profile <name>]` | 回滚到某份 `healthy` 快照。默认停掉 3080 端口的宿主并重新启动，除非给了 `--no-auto-restart`。 |
+| `guard restore <id> [--no-auto-restart] [--profile <name>]` | 回滚到某份 `healthy` 快照。如 3080 端口有宿主在运行则将其停止；除非指定 `--no-auto-restart`，否则重新启动宿主。 |
 | `guard check [--profile <name>]` | 只读健康检查。退出码 0 = 健康，1 = 发现问题。 |
 | `guard watch [--profile <name>]` | 常驻自动快照：监听 `package.json` / `pnpm-lock.yaml`，变更时自动快照。Ctrl+C 或 SIGTERM 退出。 |
 

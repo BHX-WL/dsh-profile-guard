@@ -40,7 +40,7 @@ Every command accepts `--profile <name>` (default: `web`).
 | `guard snapshot [--profile <name>] [--reason "<note>"]` | Take a snapshot of the current profile state. Run it before you install a plugin. |
 | `guard list [--profile <name>]` | List snapshots: id, time, reason, and state (`[healthy]` / `[pending]`). |
 | `guard show <id> [--profile <name>]` | Show one snapshot's details: bundles, dependencies, hash. |
-| `guard restore <id> [--no-auto-restart] [--profile <name>]` | Roll the profile back to a `healthy` snapshot. Stops the host on port 3080 and starts it again unless `--no-auto-restart` is given. |
+| `guard restore <id> [--no-auto-restart] [--profile <name>]` | Roll the profile back to a `healthy` snapshot. Stops the host on port 3080 if one is running; starts it again unless `--no-auto-restart` is given. |
 | `guard check [--profile <name>]` | Read-only health check of the profile. Exit 0 = healthy, exit 1 = problems found. |
 | `guard watch [--profile <name>]` | Resident auto-snapshot: watch `package.json` / `pnpm-lock.yaml` and snapshot automatically when they change. Stop with Ctrl+C or SIGTERM. |
 
