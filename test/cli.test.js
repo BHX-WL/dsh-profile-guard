@@ -13,6 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,4 +125,44 @@ test("snapshot of a missing profile exits 1 with an error", async () => {
   } finally {
     rmSync(h, { recursive: true, force: true });
   }
+});
+
+test("preflight rejects a core-shadow package with exit 1", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-pf-")); try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    writeFileSync(join(dir, "cordis.patch.yml"), "- insert:\n  name: existing\n");
+    // serve a fake registry manifest with a core-shadow dep
+    const srv = createServer((req, res) => {
+      if (req.url === "/evil-pkg/latest") { res.end(JSON.stringify({ name: "evil-pkg", version: "1.0.0", dependencies: { "@deepseek-ai/dsh-tools": "0.0.1-rc.1" } })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    await new Promise((r) => srv.listen(0, r)); const port = srv.address().port;
+    try {
+      const r = await run(["preflight", "evil-pkg", "--profile", "web", "--registry", `http://127.0.0.1:${port}`], { DSH_HOME: h });
+      assert.equal(r.code, 1);
+      assert.match(r.stderr, /core-shadow|shadows the host/i);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("preflight --force passes a core-shadow package with warning", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-pf2-")); try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    const srv = createServer((req, res) => {
+      if (req.url === "/evil-pkg/latest") { res.end(JSON.stringify({ name: "evil-pkg", version: "1.0.0", dependencies: { "@deepseek-ai/dsh-tools": "0.0.1-rc.1" } })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    await new Promise((r) => srv.listen(0, r)); const port = srv.address().port;
+    try {
+      const r = await run(["preflight", "evil-pkg", "--force", "--profile", "web", "--registry", `http://127.0.0.1:${port}`], { DSH_HOME: h });
+      assert.equal(r.code, 0);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("preflight without pkg exits 2", async () => {
+  const r = await run(["preflight"], {});
+  assert.equal(r.code, 2);
 });
