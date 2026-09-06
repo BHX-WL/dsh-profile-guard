@@ -39,7 +39,7 @@ project: G:\deepseek\opensource\dsh-profile-guard
 
 ### 非目标（明确不做）
 - 不改 dsh CLI、不改 dshmarket、不打本地补丁（升级即丢前科）；
-- 不重造 market 已有逻辑（engines/peer 判定可参考其语义，但实现自带）；
+- 不重造 market 已有逻辑（engines 判定可参考其语义，但实现自带）；
 - 不做 ⚠️ soft-incompatible 软判定（保持 confirmed 强度，避免误伤生态）；
 - 不改 ① 的既有命令/测试（preflight 是纯增量）。
 
@@ -64,7 +64,7 @@ guard install <pkg> [--force] [--registry <url>]     # 闭环：preflight → sn
 | **bundle patch 撞 id** | 候选包 cordis.patch.yml 的 insert id 与已装插件（profile cordis.patch.yml 合成）重复 → 拒 | dup loader entry id = boot 硬失败 |
 | **registry 解析** | 包/版本不存在或 manifest 不可读 → exit 1 明确报错 | — |
 
-**顺序**：registry 解析最先（后续检查需 manifest）→ core 遮蔽 → engines/peer → patch 撞 id。全部通过 exit 0，打印通过摘要。
+**顺序**：registry 解析最先（后续检查需 manifest）→ core 遮蔽 → engines → patch 撞 id。全部通过 exit 0，打印通过摘要。
 
 ## 6. 核心包清单（自带副本）
 
@@ -121,7 +121,7 @@ guard install <pkg> [--force] [--registry <url>]     # 闭环：preflight → sn
 | C3 | manifest schema `dsh.profile.bundles` + dependencies | snapshot/rollback/watch 读写 | schema 字段改名/移动 |
 | C4 | cordis.patch.yml 顶层 `- insert:` + `name:` | check.js dup-id 检测 | patch 格式演进 |
 | C5 | boot 失败文本 `plugin tree failed` 等 | boot.js isPluginFailure 触发回滚 | 错误措辞变化 → 回滚永不触发 |
-| C6 | 宿主版本号语义（0.1.2-rc.1） | preflight engines/peer 比对 | 版本格式/频道变化 |
+| C6 | 宿主版本号语义（0.1.2-rc.1） | preflight engines 比对 | 版本格式/频道变化 |
 
 ### 防护策略（每条落为代码要求，测试覆盖）
 1. **防御性读取（所有 C3/C4）**：manifest/patch 解析全部容错——读不到 `dsh.profile.bundles` 按空处理并 warn，绝不 throw；schema 未知字段**保留原样写回**（不做破坏性重写）。已有 readManifest 返 null 语义，扩展：任何结构假设（`.dsh.profile` 存在）都经可选链 + 默认值。
