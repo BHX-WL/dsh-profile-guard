@@ -63,3 +63,40 @@ test("latestHealthy returns most recent healthy; markHealthy promotes; prune kee
     });
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test("createSnapshot with an existing id returns it untouched (dedupe)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "guard-h-"));
+  try {
+    makeProfile(home, "web", { a: "1" }, ["x"]);
+    await withHome(home, async () => {
+      const first = await createSnapshot("web", { reason: "dup", healthy: false });
+      await markHealthy("web", first.id);
+      // Same manifest, same second -> same id: must not overwrite the healthy flag.
+      const second = await createSnapshot("web", { reason: "dup again", healthy: true });
+      assert.equal(second.id, first.id);
+      assert.equal(second.dir, first.dir);
+      assert.equal(second.healthy, true);
+      const snaps = listSnapshots("web");
+      assert.equal(snaps.length, 1);
+      assert.equal(snaps[0].healthy, true);
+      assert.equal(snaps[0].reason, "dup"); // original meta survived
+    });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("markHealthy rewrites meta.json with healthy and promotedAt", async () => {
+  const home = mkdtempSync(join(tmpdir(), "guard-h-"));
+  try {
+    makeProfile(home, "web", { a: "1" }, ["x"]);
+    await withHome(home, async () => {
+      const s = await createSnapshot("web", { reason: "promote", healthy: false });
+      await markHealthy("web", s.id);
+      const meta = JSON.parse(readFileSync(join(s.dir, "meta.json"), "utf8"));
+      assert.equal(meta.healthy, true);
+      assert.equal(typeof meta.promotedAt, "string");
+      assert.ok(meta.promotedAt.length > 0);
+      assert.equal(meta.reason, "promote"); // other fields preserved
+      assert.equal(existsSync(join(s.dir, ".meta.tmp")), false); // staging cleaned up
+    });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
