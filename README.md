@@ -61,7 +61,7 @@ Note: `guard preflight` checks core-shadowing and the declared dsh engine requir
 - `--lan` — print only the LAN announce URL: skip the Tailscale probe.
 - `--show-token` — print the full launch token (human output masks it: first 6 characters plus `...`).
 - `--json` — machine-readable output (ok, url, tailscaleUrl, lanUrl, token, verified, at, logFile). The `token` field carries the full token, so do not paste this output into chats or logs.
-- `remote` needs no profile and writes nothing: one log read and one loopback HTTP verification request, nothing leaves your machine.
+- `remote` needs no profile and writes nothing: one log read and one HTTP verification to the machine's own address, nothing leaves your machine.
 
 The log path, port and Tailscale command are env-overridable contract points: `DSH_GUARD_HOST_LOG` (default `%APPDATA%\dsh-desktop\host-last.log`), `DSH_GUARD_PORT` (default `3080`) and `DSH_GUARD_TAILSCALE_CMD` (default `tailscale`).
 
@@ -119,7 +119,7 @@ guard runs **outside** the dsh host: no lib file imports a host runtime package,
 - When `guard` stops the host it only kills processes on port 3080 whose command line carries a dsh marker (`dsh`, `bin.js`, `deepseek`) — never an unrelated process squatting on the port.
 - `guard boot` and `guard restore` stop and start your **real** dsh host (port 3080). Run them only when you can accept a host restart — for example during an idle desktop window — and never from inside a session that the host itself serves.
 - Everything stays on your machine and no external network request is made, except for `guard preflight` and `guard install`, which fetch the package manifest from the npm registry (`guard install` also runs `dsh plugin add`, which downloads and installs the package). Hot-mounting is loopback-only: `guard install` may POST to the local dsh-market toggle at `http://127.0.0.1:3080` to activate a plain-insert or client-only plugin without a restart, and `guard hotmount` does the same on demand.
-- `guard remote` masks the launch token in human output (first 6 characters plus `...`); only `--show-token` and `--json` reveal it, so do not paste that output into chats or logs. It is read-only: one host-log read, one loopback HTTP verification, and a read-only `tailscale ip -4` probe — no external network, nothing written.
+- `guard remote` masks the launch token in human output (first 6 characters plus `...`); only `--show-token` and `--json` reveal it, so do not paste that output into chats or logs. It is read-only: one host-log read, one HTTP verification to the machine's own address, and a read-only `tailscale ip -4` probe — no external network, nothing written.
 
 ## Tests
 
