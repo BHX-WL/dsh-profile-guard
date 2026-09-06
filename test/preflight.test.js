@@ -95,3 +95,17 @@ test("bundle patch with no candidate text warns patch-unverified but does not bl
   assert.ok(v);
   assert.equal(v.severity, "warn");
 });
+
+test("incomplete range forms are an open pass, never a false rejection (fix r1)", () => {
+  assert.equal(admits("0.1.x", "0.1.2-rc.1"), true);
+  assert.equal(admits("1.2", "0.1.2"), true);
+  assert.equal(admits("1.0.0 - 2.0.0", "1.5.0"), true);
+});
+
+test("caret 0.x enforces the minor and patch upper bounds (fix r1)", () => {
+  assert.equal(admits("^0.2.3", "0.3.0"), false);
+  assert.equal(admits("^0.2.3", "0.2.4"), true);
+  assert.equal(admits("^0.0.3", "0.0.4"), false);
+  assert.equal(admits("^0.0.3", "0.0.3"), true);
+  assert.equal(admits("^0.0.3", "0.0.2"), false);
+});
