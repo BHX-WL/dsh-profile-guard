@@ -14,7 +14,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -203,6 +204,44 @@ test("preflight --force does not override a host-incompatible engine", async () 
       const r = await run(["preflight", "needy-pkg", "--force", "--profile", "web", "--registry", `http://127.0.0.1:${port}`], { DSH_HOME: h });
       assert.equal(r.code, 1);
       assert.match(r.stderr, /host-incompatible|declares dsh engine/i);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+test("install runs preflight and snapshot but does not spawn in dry mode", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-in-")); try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    const srv = createServer((req, res) => {
+      if (req.url === "/good-pkg/latest") { res.end(JSON.stringify({ name: "good-pkg", version: "1.0.0", dependencies: { diff: "^5.0.0" } })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    await new Promise((r) => srv.listen(0, r)); const port = srv.address().port;
+    try {
+      const r = await run(["install", "good-pkg", "--profile", "web", "--registry", `http://127.0.0.1:${port}`], { DSH_HOME: h, DSH_GUARD_DRY_INSTALL: "1" });
+      assert.equal(r.code, 0);
+      assert.match(r.stdout, /dry/i);
+      // a snapshot was created
+      const snaps = readdirSync(join(h, "guards", "web")).filter((n) => n !== "crash");
+      assert.ok(snaps.length >= 1);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("install rejects a core-shadow package before snapshotting", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-in2-")); try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    const srv = createServer((req, res) => {
+      if (req.url === "/evil-pkg/latest") { res.end(JSON.stringify({ name: "evil-pkg", version: "1.0.0", dependencies: { "@deepseek-ai/dsh-tools": "0.0.1-rc.1" } })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    await new Promise((r) => srv.listen(0, r)); const port = srv.address().port;
+    try {
+      const r = await run(["install", "evil-pkg", "--profile", "web", "--registry", `http://127.0.0.1:${port}`], { DSH_HOME: h, DSH_GUARD_DRY_INSTALL: "1" });
+      assert.equal(r.code, 1);
+      const guards = join(h, "guards", "web");
+      const snaps = fs.existsSync(guards) ? readdirSync(guards).filter((n) => n !== "crash") : [];
+      assert.equal(snaps.length, 0); // refused before any snapshot
     } finally { srv.close(); }
   } finally { rmSync(h, { recursive: true, force: true }); }
 });
