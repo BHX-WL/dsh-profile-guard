@@ -107,6 +107,25 @@ test("bootRollbackResult folds hashOk into ok and keeps the earliest error", () 
   assert.equal(early.error, "snapshot S1 missing");
 });
 
+test("bootRollbackResult requires a successful restart on the boot path", () => {
+  // Boot semantics: after a rollback the host must actually be back up. A
+  // restored-but-not-running host is a boot failure, whatever the restore did.
+  // (b) restart was attempted and failed -> the restart error is the reason
+  const failedUp = bootRollbackResult("S1", { ok: true, restarted: false, restartError: "host did not become ready within 45000ms", hashOk: null, report: "rep" }, { requireRestart: true });
+  assert.equal(failedUp.ok, false);
+  assert.match(failedUp.error, /host did not become ready/);
+  assert.equal(failedUp.restarted, false);
+  assert.equal(failedUp.report, "rep");
+  // (a) restart was skipped (static check did not pass) -> explicit fallback reason
+  const skipped = bootRollbackResult("S1", { ok: true, restarted: false, restartError: null, hashOk: null });
+  assert.equal(skipped.ok, false);
+  assert.match(skipped.error, /restored but host did not restart/);
+  // restart waived (autoRestart:false dry rollback) -> restored without a host up is a success
+  const waived = bootRollbackResult("S1", { ok: true, restarted: false, restartError: null, hashOk: null }, { requireRestart: false });
+  assert.equal(waived.ok, true);
+  assert.equal(waived.error, null);
+});
+
 test("bootOnce rolls back to the latest healthy snapshot on a plugin-failure log (dry)", async () => {
   const h = mkdtempSync(join(tmpdir(), "guard-b-"));
   try {
@@ -132,6 +151,40 @@ test("bootOnce rolls back to the latest healthy snapshot on a plugin-failure log
       assert.equal(r.rolledBack, true);
       assert.equal(r.snapshotId, snap.id);
       assert.deepEqual(readManifest(profileDir("web")), good); // manifest restored from snapshot
+    });
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("bootOnce reports failure when the restored manifest fails the static check (restart skipped, dry)", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-b-"));
+  try {
+    // Healthy snapshot whose bundle cannot resolve: restoring it restores the
+    // manifest, then the rollback's static check fails and the restart is
+    // skipped — under boot semantics that is a boot failure (the host is not
+    // running again), never a "boot ok".
+    const good = { dependencies: { ghost: "1" }, dsh: { profile: { bundles: ["ghost"] } } };
+    const bad = { dependencies: { evil: "1" }, dsh: { profile: { bundles: ["evil"] } } };
+    makeProfile(h, "web", good);
+    await withHome(h, async () => {
+      const snap = await createSnapshot("web", { reason: "healthy but unresolvable", healthy: true });
+      writeFileSync(join(h, "profiles", "web", "package.json"), JSON.stringify(bad));
+      const logDir = join(h, "guards", "web", "crash");
+      mkdirSync(logDir, { recursive: true });
+      const logFile = join(logDir, "boot-fake2.log");
+      writeFileSync(logFile, "Error: plugin tree failed to load\n");
+      const r = await bootOnce("web", [], {
+        baseUrl: "http://127.0.0.1:1",
+        spawnHost: false,
+        waitReady: false,
+        logFile,
+        rollback: { stopPort: false }, // autoRestart stays true (boot contract); no real spawn because the check fails
+      });
+      assert.equal(r.ok, false); // restored but host not restarted -> boot failed
+      assert.equal(r.rolledBack, true);
+      assert.equal(r.restarted, false);
+      assert.match(r.error, /restored but host did not restart/);
+      assert.equal(r.snapshotId, snap.id);
+      assert.deepEqual(readManifest(profileDir("web")), good); // manifest was restored from the snapshot
     });
   } finally { rmSync(h, { recursive: true, force: true }); }
 });
