@@ -60,7 +60,7 @@ guard install <pkg> [--force] [--registry <url>]     # 闭环：preflight → sn
 | 检查 | 判定 | 依据 |
 |---|---|---|
 | **core 遮蔽**（主，唯一可 force） | prod `dependencies` 含任一宿主 core 包名 → 拒 | tool-lens 实锤；core 清单 = 自带副本（见 §6） |
-| **host engines/peer** | `dsh.engines`/`engines.dsh` 声明存在且不满足宿主 0.1.2-rc.1 → 拒 | market deriveHostCompatibility 同款语义；仅 confirmed mismatch 拒，无声明放行 |
+| **host engines** | `dsh.engines`/`engines.dsh` 声明存在且不满足宿主 0.1.2-rc.1 → 拒 | market deriveHostCompatibility 同款语义；仅 confirmed mismatch 拒，无声明放行。peerDependencies 检查列为未来增强（v0.2 未实现，README 措辞已对齐） |
 | **bundle patch 撞 id** | 候选包 cordis.patch.yml 的 insert id 与已装插件（profile cordis.patch.yml 合成）重复 → 拒 | dup loader entry id = boot 硬失败 |
 | **registry 解析** | 包/版本不存在或 manifest 不可读 → exit 1 明确报错 | — |
 
