@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSnapshot } from "../lib/snapshot.js";
-import { rollbackToSnapshot } from "../lib/rollback.js";
+import { rollbackToSnapshot, restartErrorOf } from "../lib/rollback.js";
 
 function makeHome() { return mkdtempSync(join(tmpdir(), "guard-r-")); }
 function makeProfile(home, profile, manifest) {
@@ -82,4 +82,12 @@ test("rollback refuses a snapshot that is not healthy", async () => {
       assert.match(r.error, /non-healthy/);
     });
   } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("restartErrorOf reports an explicit reason when no host log tail exists", () => {
+  const fallback = "host did not become ready within 45000ms";
+  assert.equal(restartErrorOf(""), fallback);
+  assert.equal(restartErrorOf("   "), fallback);
+  assert.equal(restartErrorOf(null), fallback);
+  assert.equal(restartErrorOf("Error: plugin tree failed to load"), "Error: plugin tree failed to load");
 });
