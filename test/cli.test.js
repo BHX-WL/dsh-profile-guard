@@ -166,3 +166,43 @@ test("preflight without pkg exits 2", async () => {
   const r = await run(["preflight"], {});
   assert.equal(r.code, 2);
 });
+
+test("preflight surfaces a patch-unverified warning on stderr", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-pw-")); try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    writeFileSync(join(dir, "cordis.patch.yml"), "- insert:\n  name: existing\n");
+    const srv = createServer((req, res) => {
+      if (req.url === "/patchy-pkg/latest") { res.end(JSON.stringify({ name: "patchy-pkg", version: "1.0.0", dependencies: {}, dsh: { bundle: { patch: "patches/plugin.yml" } } })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    await new Promise((r) => srv.listen(0, r)); const port = srv.address().port;
+    try {
+      const r = await run(["preflight", "patchy-pkg", "--profile", "web", "--registry", `http://127.0.0.1:${port}`], { DSH_HOME: h });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stderr, /warning/i);
+      assert.match(r.stderr, /could not verify/i);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("preflight --force does not override a host-incompatible engine", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-fs-")); try {
+    const dir = join(h, "profiles", "web"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }));
+    const srv = createServer((req, res) => {
+      if (req.url === "/needy-pkg/latest") { res.end(JSON.stringify({ name: "needy-pkg", version: "1.0.0", dependencies: {}, dsh: { engines: { dsh: ">=99.0.0" } } })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    await new Promise((r) => srv.listen(0, r)); const port = srv.address().port;
+    try {
+      // Pins force strictness: an engine claim the local host cannot meet is a
+      // non-forceable verdict, so --force must still refuse. Depends on the real
+      // dsh host being resolvable (0.1.2-rc.1 here, far below >=99.0.0); on a
+      // hostless machine the engines claim is an open pass and this cannot fire.
+      const r = await run(["preflight", "needy-pkg", "--force", "--profile", "web", "--registry", `http://127.0.0.1:${port}`], { DSH_HOME: h });
+      assert.equal(r.code, 1);
+      assert.match(r.stderr, /host-incompatible|declares dsh engine/i);
+    } finally { srv.close(); }
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
