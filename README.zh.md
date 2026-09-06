@@ -43,12 +43,14 @@ node lib/cli.js check
 | `guard restore <id> [--no-auto-restart] [--profile <name>]` | 回滚到某份 `healthy` 快照。如 3080 端口有宿主在运行则将其停止；除非指定 `--no-auto-restart`，否则重新启动宿主。 |
 | `guard check [--profile <name>]` | 只读健康检查。退出码 0 = 健康，1 = 发现问题。 |
 | `guard watch [--profile <name>]` | 常驻自动快照：监听 `package.json` / `pnpm-lock.yaml`，变更时自动快照。Ctrl+C 或 SIGTERM 退出。 |
-| `guard preflight <pkg> [--force]` | 安装前检查：拒绝生产依赖遮蔽宿主 @deepseek-ai 命名空间的包，以及 dsh engine/peer 要求宿主无法满足的包。退出码 0 = 安全，1 = 拒绝，`--force` 覆盖 core-shadow 检查。 |
+| `guard preflight <pkg> [--force]` | 安装前检查：拒绝生产依赖遮蔽宿主 @deepseek-ai 命名空间的包，以及宿主无法满足其 dsh engine 要求的包。退出码 0 = 安全，1 = 拒绝，`--force` 覆盖 core-shadow 检查。 |
 | `guard install <pkg> [--force] [--no-boot]` | Preflight → 快照 → `dsh plugin add` → 启动验证（失败自动回滚）。一条命令，闭环完成。 |
 
 不带参数运行 `guard`（或 `guard help`）会打印用法。
 
 退出码：`boot` 成功 0（已在运行也算成功）/ 失败 1；`snapshot`、`list` 为 0；`show` 找到 0 / 未找到 1 / 用法错误 2；`restore` 成功 0 / 失败 1 / 用法错误 2；`check` 健康 0 / 不健康 1；`watch` 在 Ctrl+C / SIGTERM 时退 0；`preflight` 安全 0 / 拒绝 1 / 用法错误 2；`install` 成功 0 / 失败或拒绝 1 / 用法错误 2；未知命令退 2。
+
+注：`guard preflight` 检查 core-shadow 与声明的 dsh engine 要求；peer 依赖兼容性属未来增强，暂不检查。
 
 ## 快照
 
@@ -117,7 +119,7 @@ guard preflight @deepseek-ai/dsh-tools --profile web
 
 `guard check` 会打印 `profile web: healthy`，或列出发现的具体问题；`guard snapshot` 打印它创建的 id；`guard list` 随后显示这份快照为 `[pending]`、备注 `(first smoke)`。
 
-`guard preflight` 在安装任何东西之前，把包对照宿主做一次检查：`guard preflight dsh-better-edit --profile web` 会打印 `guard: preflight ok for dsh-better-edit (host <version>)` 并退出 0（其生产依赖不遮蔽宿主 `@deepseek-ai` 命名空间，engine/peer 要求宿主能满足或未声明任何要求）；`guard preflight @deepseek-ai/dsh-tools --profile web` 退出 1——`@deepseek-ai/dsh-tools` 本身是 core 包，把它当插件安装会遮蔽宿主 `@deepseek-ai` 命名空间。
+`guard preflight` 在安装任何东西之前，把包对照宿主做一次检查：`guard preflight dsh-better-edit --profile web` 会打印 `guard: preflight ok for dsh-better-edit (host <version>)` 并退出 0（其生产依赖不遮蔽宿主 `@deepseek-ai` 命名空间，dsh engine 要求宿主能满足或未声明任何要求）；`guard preflight @deepseek-ai/dsh-tools --profile web` 退出 1——`@deepseek-ai/dsh-tools` 本身是 core 包，把它当插件安装会遮蔽宿主 `@deepseek-ai` 命名空间。
 
 `guard install <pkg>` 与 `guard boot` 刻意不列在这里：`guard install` 会真实执行 `dsh plugin add` 并安装该包，随后做启动验证（可能停止并重启你的真实宿主）；`guard boot` 顾名思义会重启宿主。请在桌面端空闲时段亲自运行，绝不要在宿主自身服务的会话里运行。
 

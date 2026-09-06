@@ -43,12 +43,14 @@ Every command accepts `--profile <name>` (default: `web`).
 | `guard restore <id> [--no-auto-restart] [--profile <name>]` | Roll the profile back to a `healthy` snapshot. Stops the host on port 3080 if one is running; starts it again unless `--no-auto-restart` is given. |
 | `guard check [--profile <name>]` | Read-only health check of the profile. Exit 0 = healthy, exit 1 = problems found. |
 | `guard watch [--profile <name>]` | Resident auto-snapshot: watch `package.json` / `pnpm-lock.yaml` and snapshot automatically when they change. Stop with Ctrl+C or SIGTERM. |
-| `guard preflight <pkg> [--force]` | Check a package before installing: refuses packages whose prod dependencies shadow the host @deepseek-ai namespace, or whose dsh engine/peer requirements the host cannot meet. Exit 0 = safe, 1 = refused, `--force` overrides the core-shadow check. |
+| `guard preflight <pkg> [--force]` | Check a package before installing: refuses packages whose prod dependencies shadow the host @deepseek-ai namespace, or whose dsh engine requirements the host cannot meet. Exit 0 = safe, 1 = refused, `--force` overrides the core-shadow check. |
 | `guard install <pkg> [--force] [--no-boot]` | Preflight → snapshot → `dsh plugin add` → boot verification (auto-rollback on failure). One command, closed loop. |
 
 Running `guard` with no arguments (or `guard help`) prints this usage.
 
 Exit codes: `boot` 0 on success (already running is a success) / 1 on failure; `snapshot` and `list` 0; `show` 0 found / 1 not found / 2 usage error; `restore` 0 / 1 failure / 2 usage error; `check` 0 healthy / 1 unhealthy; `watch` exits 0 on Ctrl+C / SIGTERM; `preflight` 0 safe / 1 refused / 2 usage error; `install` 0 ok / 1 failed or refused / 2 usage error; an unknown command exits 2.
+
+Note: `guard preflight` checks core-shadowing and the declared dsh engine requirement; peer-dependency compatibility is a future enhancement and is not checked yet.
 
 ## Snapshots
 
@@ -117,7 +119,7 @@ guard preflight @deepseek-ai/dsh-tools --profile web
 
 `guard check` prints `profile web: healthy`, or the concrete problems found; `guard snapshot` prints the id it created; `guard list` then shows that snapshot as `[pending]` with the note `(first smoke)`.
 
-`guard preflight` checks a package against the host before anything is installed: `guard preflight dsh-better-edit --profile web` prints `guard: preflight ok for dsh-better-edit (host <version>)` and exits 0 (its prod dependencies do not shadow the host `@deepseek-ai` namespace and its engine/peer requirements are met, or none are declared); `guard preflight @deepseek-ai/dsh-tools --profile web` exits 1 — `@deepseek-ai/dsh-tools` is itself a core package, so installing it as a plugin would shadow the host `@deepseek-ai` namespace.
+`guard preflight` checks a package against the host before anything is installed: `guard preflight dsh-better-edit --profile web` prints `guard: preflight ok for dsh-better-edit (host <version>)` and exits 0 (its prod dependencies do not shadow the host `@deepseek-ai` namespace and its dsh engine requirements are met, or none are declared); `guard preflight @deepseek-ai/dsh-tools --profile web` exits 1 — `@deepseek-ai/dsh-tools` is itself a core package, so installing it as a plugin would shadow the host `@deepseek-ai` namespace.
 
 `guard install <pkg>` and `guard boot` are intentionally not listed here: `guard install` really runs `dsh plugin add` and installs the package, then boot-verifies the new plugin (which may stop and restart your real host), and `guard boot` restarts the host by definition. Run them yourself, during an idle desktop window, and never from inside a session that the host serves.
 
