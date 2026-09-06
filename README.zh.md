@@ -44,11 +44,12 @@ node lib/cli.js check
 | `guard check [--profile <name>]` | 只读健康检查。退出码 0 = 健康，1 = 发现问题。 |
 | `guard watch [--profile <name>]` | 常驻自动快照：监听 `package.json` / `pnpm-lock.yaml`，变更时自动快照。Ctrl+C 或 SIGTERM 退出。 |
 | `guard preflight <pkg> [--force]` | 安装前检查：拒绝生产依赖遮蔽宿主 @deepseek-ai 命名空间的包，以及宿主无法满足其 dsh engine 要求的包。退出码 0 = 安全，1 = 拒绝，`--force` 覆盖 core-shadow 检查。 |
-| `guard install <pkg> [--force] [--no-boot]` | Preflight → 快照 → `dsh plugin add` → 启动验证（失败自动回滚）。一条命令，闭环完成。 |
+| `guard install <pkg> [--force] [--no-boot]` | Preflight → 快照 → `dsh plugin add` → 激活：纯 insert 插件经 market toggle 免重启热挂；其余形状或 toggle 失败则回退启动验证（失败自动回滚）。一条命令，闭环完成。 |
+| `guard hotmount <pkg> [--profile <name>]` | 对已装插件免重启触发热挂载——install 装后激活的独立命令形态。仅纯 insert 插件符合；无重启回退，形状不符或 toggle 失败会打印原因并退出 1。 |
 
 不带参数运行 `guard`（或 `guard help`）会打印用法。
 
-退出码：`boot` 成功 0（已在运行也算成功）/ 失败 1；`snapshot`、`list` 为 0；`show` 找到 0 / 未找到 1 / 用法错误 2；`restore` 成功 0 / 失败 1 / 用法错误 2；`check` 健康 0 / 不健康 1；`watch` 在 Ctrl+C / SIGTERM 时退 0；`preflight` 安全 0 / 拒绝 1 / 用法错误 2；`install` 成功 0 / 失败或拒绝 1 / 用法错误 2；未知命令退 2。
+退出码：`boot` 成功 0（已在运行也算成功）/ 失败 1；`snapshot`、`list` 为 0；`show` 找到 0 / 未找到 1 / 用法错误 2；`restore` 成功 0 / 失败 1 / 用法错误 2；`check` 健康 0 / 不健康 1；`watch` 在 Ctrl+C / SIGTERM 时退 0；`preflight` 安全 0 / 拒绝 1 / 用法错误 2；`install` 成功 0 / 失败或拒绝 1 / 用法错误 2；`hotmount` 热挂成功 0 / 未装、形状拒绝或 toggle 失败 1 / 用法错误 2；未知命令退 2。
 
 注：`guard preflight` 检查 core-shadow 与声明的 dsh engine 要求；peer 依赖兼容性属未来增强，暂不检查。
 
@@ -86,7 +87,7 @@ $DSH_HOME/guards/<profile>/<snapshot-id>/
 guard 运行在 dsh 宿主**之外**：lib 任何文件都不 import 宿主运行时包，因此官方宿主更新不会像弄崩宿主内插件那样、通过 import 错配弄崩 guard。guard 真正依赖的是一小组磁盘/CLI 契约点：宿主启动 marker、启动失败文本、`dsh plugin` CLI 形态、profile manifest schema。三条规则保证这些契约点不会静默失效：
 
 - **零运行时耦合。** lib 任何文件都不 import 任何 `@deepseek-ai/*` 模块。guard 只从外部读宿主——解析已安装的 dsh bin、读取其版本、读取 profile manifest。宿主缺失或不可读时，guard 降级为仍能在本地证实的检查，并把宿主版本如实报告为 unknown，绝不猜测。
-- **契约常数可用 env 覆写。** marker 与失败文本常量集中在单一模块 `lib/contract.js`，每个都能用环境变量覆写——`DSH_GUARD_BOOT_MARKER`、`DSH_GUARD_AUTH_MARKER`、`DSH_GUARD_NO_OPEN`、`DSH_GUARD_FAIL_TEXT`。官方更新改了某个 marker 或失败文本时，适配只是改配置，不是改代码。
+- **契约常数可用 env 覆写。** marker 与失败文本常量集中在单一模块 `lib/contract.js`，每个都能用环境变量覆写——`DSH_GUARD_BOOT_MARKER`、`DSH_GUARD_AUTH_MARKER`、`DSH_GUARD_NO_OPEN`、`DSH_GUARD_FAIL_TEXT`。官方更新改了某个 marker 或失败文本时，适配只是改配置，不是改代码。market 热挂 toggle 的键在同一模块、同样可用 env 覆写——`DSH_GUARD_MARKET_BASE`、`DSH_GUARD_MARKET_TOGGLE_PATH`、`DSH_GUARD_MARKET_ORIGIN`。
 - **绝不静默降级。** guard 从不在无法确认的契约点上猜测：读不到的 profile manifest 被如实报告为问题，绝不当成健康；启动日志中找不到任何已知插件失败文本的启动失败**不会**自动回滚——guard 报告失败但不回滚（错误回滚比漏掉回滚更糟）；preflight 的每条警告与拒绝都会打印，绝不吞掉。
 
 ## 安全说明
@@ -95,7 +96,7 @@ guard 运行在 dsh 宿主**之外**：lib 任何文件都不 import 宿主运�
 - 快照与报告不含凭据：恢复报告的自由文本字段在落盘前会脱敏（token、authorization 头、cookie、密码）。
 - `guard` 停宿主时只杀 3080 端口上命令行带 dsh 特征（`dsh`、`bin.js`、`deepseek`）的进程——绝不误杀占用该端口的无关进程。
 - `guard boot` 与 `guard restore` 会停止并重新启动你的**真实** dsh 宿主（3080 端口）。只在你能接受一次宿主重启的时段运行——例如桌面端空闲时段——绝不要在宿主自身服务的会话里运行。
-- 全部保持在本机、不做任何网络请求——唯独 `guard preflight` 与 `guard install` 例外：这两条会从 npm registry 拉取包 manifest（`guard install` 还会执行 `dsh plugin add` 下载并安装该包）。
+- 全部保持在本机、不做任何外部网络请求——唯独 `guard preflight` 与 `guard install` 例外：这两条会从 npm registry 拉取包 manifest（`guard install` 还会执行 `dsh plugin add` 下载并安装该包）。热挂只走 loopback：`guard install` 可能向本机 dsh-market toggle（`http://127.0.0.1:3080`）POST 以免重启激活纯 insert 插件，`guard hotmount` 按需做同样的事。
 
 ## 测试
 
@@ -115,13 +116,16 @@ guard snapshot --profile web --reason "first smoke"
 guard list --profile web
 guard preflight dsh-better-edit --profile web
 guard preflight @deepseek-ai/dsh-tools --profile web
+guard hotmount dsh-better-edit --profile web
 ```
 
 `guard check` 会打印 `profile web: healthy`，或列出发现的具体问题；`guard snapshot` 打印它创建的 id；`guard list` 随后显示这份快照为 `[pending]`、备注 `(first smoke)`。
 
 `guard preflight` 在安装任何东西之前，把包对照宿主做一次检查：`guard preflight dsh-better-edit --profile web` 会打印 `guard: preflight ok for dsh-better-edit (host <version>)` 并退出 0（其生产依赖不遮蔽宿主 `@deepseek-ai` 命名空间，dsh engine 要求宿主能满足或未声明任何要求）；`guard preflight @deepseek-ai/dsh-tools --profile web` 退出 1——`@deepseek-ai/dsh-tools` 本身是 core 包，把它当插件安装会遮蔽宿主 `@deepseek-ai` 命名空间。
 
-`guard install <pkg>` 与 `guard boot` 刻意不列在这里：`guard install` 会真实执行 `dsh plugin add` 并安装该包，随后做启动验证（可能停止并重启你的真实宿主）；`guard boot` 顾名思义会重启宿主。请在桌面端空闲时段亲自运行，绝不要在宿主自身服务的会话里运行。
+`guard hotmount dsh-better-edit --profile web` 对真实 market 执行热挂 toggle：market 接受时 guard 打印 `hot-mounted dsh-better-edit` 并退出 0；插件未安装或其 patch 非纯 insert 时，以原因退出 1（stderr）。对已处于 live 的插件重复 toggle 是幂等 no-op，因此在真实 profile 上试这条命令是安全的——但它确实会向本机 market（`127.0.0.1:3080`）POST，请在桌面端空闲时段运行。想不发请求只看效果，可在命令前加 `DSH_GUARD_DRY_HOTMOUNT=1`：它会打印 `[dry] would hot-mount dsh-better-edit`。
+
+`guard install <pkg>` 与 `guard boot` 刻意不列在这里：`guard install` 会真实执行 `dsh plugin add` 并安装该包，随后激活它——纯 insert 插件经 market toggle 免重启热挂，其余情况做启动验证（可能停止并重启你的真实宿主）；`guard boot` 顾名思义会重启宿主。请在桌面端空闲时段亲自运行，绝不要在宿主自身服务的会话里运行。
 
 ## 许可证
 
