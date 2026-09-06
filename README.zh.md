@@ -32,7 +32,7 @@ node lib/cli.js check
 
 ## 命令
 
-每条命令都接受 `--profile <name>`（默认 `web`）。
+每条命令都接受 `--profile <name>`（默认 `web`）。`remote` 会忽略它——它读取的是运行中的宿主，而非某个 profile。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -46,12 +46,34 @@ node lib/cli.js check
 | `guard preflight <pkg> [--force]` | 安装前检查：拒绝生产依赖遮蔽宿主 @deepseek-ai 命名空间的包，以及宿主无法满足其 dsh engine 要求的包。退出码 0 = 安全，1 = 拒绝，`--force` 覆盖 core-shadow 检查。 |
 | `guard install <pkg> [--force] [--no-boot]` | Preflight → 快照 → `dsh plugin add` → 激活：纯 insert 或 client-only 插件经 market toggle 免重启热挂；不支持的形状或 toggle 失败则回退启动验证（失败自动回滚）。一条命令，闭环完成。 |
 | `guard hotmount <pkg> [--profile <name>]` | 对已装插件免重启触发热挂载——install 装后激活的独立命令形态。仅纯 insert 或 client-only 插件符合；无重启回退，不支持的形状或 toggle 失败会打印原因并退出 1。 |
+| `guard remote [--json] [--lan] [--show-token]` | 打印运行中 dsh web 宿主可供手机访问的 URL：从 `host-last.log` 读取当前 launch token、验证后打印 Tailscale URL（LAN URL 作回退）。人类可读输出会脱敏 token；`--json` 为脚本携带完整 token。 |
 
 不带参数运行 `guard`（或 `guard help`）会打印用法。
 
-退出码：`boot` 成功 0（已在运行也算成功）/ 失败 1；`snapshot`、`list` 为 0；`show` 找到 0 / 未找到 1 / 用法错误 2；`restore` 成功 0 / 失败 1 / 用法错误 2；`check` 健康 0 / 不健康 1；`watch` 在 Ctrl+C / SIGTERM 时退 0；`preflight` 安全 0 / 拒绝 1 / 用法错误 2；`install` 成功 0 / 失败或拒绝 1 / 用法错误 2；`hotmount` 热挂成功 0 / 未装、形状拒绝或 toggle 失败 1 / 用法错误 2；未知命令退 2。
+退出码：`boot` 成功 0（已在运行也算成功）/ 失败 1；`snapshot`、`list` 为 0；`show` 找到 0 / 未找到 1 / 用法错误 2；`restore` 成功 0 / 失败 1 / 用法错误 2；`check` 健康 0 / 不健康 1；`watch` 在 Ctrl+C / SIGTERM 时退 0；`preflight` 安全 0 / 拒绝 1 / 用法错误 2；`install` 成功 0 / 失败或拒绝 1 / 用法错误 2；`hotmount` 热挂成功 0 / 未装、形状拒绝或 toggle 失败 1 / 用法错误 2；`remote` 可用 URL 0 / 不可用 1（宿主日志缺失、无 token 或 token 过期、无可达地址）；未知命令退 2。
 
 注：`guard preflight` 检查 core-shadow 与声明的 dsh engine 要求；peer 依赖兼容性属未来增强，暂不检查。
+
+## 手机远程访问
+
+`guard remote` 打印运行中的 dsh 宿主可供手机打开网页 UI 的 URL。它读取宿主 announce 日志，取**最后**一行带 launch token 的行（`dsh web: http://127.0.0.1:3080/?token=...`），对运行中的宿主验证 token（HTTP 303/200 = 有效；401 = 宿主已重启、token 过期），然后打印 Tailscale URL——Tailscale 不可用（`tailscale ip -4` 失败）时回退到 LAN announce URL。
+
+- `--lan` — 只打印 LAN announce URL：跳过 Tailscale 探测。
+- `--show-token` — 打印完整 launch token（人类可读输出会脱敏：前 6 位加 `...`）。
+- `--json` — 机器可读输出（ok、url、tailscaleUrl、lanUrl、token、verified、at、logFile）。`token` 字段携带完整 token，因此不要把这部分输出贴进聊天或日志。
+- `remote` 不需要 profile，也不写任何东西：一次日志读取 + 一次 loopback HTTP 验证请求，全部留在本机。
+
+日志路径、端口与 Tailscale 命令都是可 env 覆写的契约点：`DSH_GUARD_HOST_LOG`（默认 `%APPDATA%\dsh-desktop\host-last.log`）、`DSH_GUARD_PORT`（默认 `3080`）、`DSH_GUARD_TAILSCALE_CMD`（默认 `tailscale`）。
+
+退出码：`remote` 0 = 已打印可用 URL；1 = 不可用（宿主日志缺失、无 announce token、token 过期、无可达地址）。
+
+宿主运行时可以对真实环境试一次：
+
+```sh
+guard remote --lan
+guard remote
+guard remote --json
+```
 
 ## 快照
 
@@ -97,6 +119,7 @@ guard 运行在 dsh 宿主**之外**：lib 任何文件都不 import 宿主运�
 - `guard` 停宿主时只杀 3080 端口上命令行带 dsh 特征（`dsh`、`bin.js`、`deepseek`）的进程——绝不误杀占用该端口的无关进程。
 - `guard boot` 与 `guard restore` 会停止并重新启动你的**真实** dsh 宿主（3080 端口）。只在你能接受一次宿主重启的时段运行——例如桌面端空闲时段——绝不要在宿主自身服务的会话里运行。
 - 全部保持在本机、不做任何外部网络请求——唯独 `guard preflight` 与 `guard install` 例外：这两条会从 npm registry 拉取包 manifest（`guard install` 还会执行 `dsh plugin add` 下载并安装该包）。热挂只走 loopback：`guard install` 可能向本机 dsh-market toggle（`http://127.0.0.1:3080`）POST 以免重启激活纯 insert 或 client-only 插件，`guard hotmount` 按需做同样的事。
+- `guard remote` 在人类可读输出中会脱敏 launch token（前 6 位加 `...`）；只有 `--show-token` 与 `--json` 会显示完整 token，因此不要把这类输出贴进聊天或日志。它只读：一次宿主日志读取、一次 loopback HTTP 验证、一次只读的 `tailscale ip -4` 探测——无外部网络请求，也不写任何东西。
 
 ## 测试
 

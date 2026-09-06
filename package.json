@@ -1,6 +1,6 @@
 {
   "name": "dsh-profile-guard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": false,
   "description": "Install-crash insurance for the dsh CLI plugin path: snapshot healthy profiles, auto-rollback when a plugin breaks the host boot.",
   "type": "module",

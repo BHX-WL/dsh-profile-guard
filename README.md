@@ -32,7 +32,7 @@ Both entry points are equivalent: every `guard <command>` below can also be run 
 
 ## Commands
 
-Every command accepts `--profile <name>` (default: `web`).
+Every command accepts `--profile <name>` (default: `web`). `remote` ignores it — it reads the running host, not a profile.
 
 | Command | What it does |
 | --- | --- |
@@ -46,12 +46,34 @@ Every command accepts `--profile <name>` (default: `web`).
 | `guard preflight <pkg> [--force]` | Check a package before installing: refuses packages whose prod dependencies shadow the host @deepseek-ai namespace, or whose dsh engine requirements the host cannot meet. Exit 0 = safe, 1 = refused, `--force` overrides the core-shadow check. |
 | `guard install <pkg> [--force] [--no-boot]` | Preflight → snapshot → `dsh plugin add` → activation: a plain-insert or client-only plugin is hot-mounted through the market toggle with no restart; any unsupported shape, or a failed toggle, falls back to boot verification (auto-rollback on failure). One command, closed loop. |
 | `guard hotmount <pkg> [--profile <name>]` | Hot-mount an already-installed plugin without a restart — install's post-add activation as a standalone command. Only plain-insert or client-only plugins qualify, and there is no restart fallback: an unsupported shape or a failed toggle exits 1 with the reason. |
+| `guard remote [--json] [--lan] [--show-token]` | Print a phone-usable URL for the running dsh web host: read the current launch token from `host-last.log`, verify it, then print the Tailscale URL (LAN URL as fallback). Human output masks the token; `--json` includes it in full for scripts. |
 
 Running `guard` with no arguments (or `guard help`) prints this usage.
 
-Exit codes: `boot` 0 on success (already running is a success) / 1 on failure; `snapshot` and `list` 0; `show` 0 found / 1 not found / 2 usage error; `restore` 0 / 1 failure / 2 usage error; `check` 0 healthy / 1 unhealthy; `watch` exits 0 on Ctrl+C / SIGTERM; `preflight` 0 safe / 1 refused / 2 usage error; `install` 0 ok / 1 failed or refused / 2 usage error; `hotmount` 0 hot-mounted / 1 not installed, shape refused, or toggle failed / 2 usage error; an unknown command exits 2.
+Exit codes: `boot` 0 on success (already running is a success) / 1 on failure; `snapshot` and `list` 0; `show` 0 found / 1 not found / 2 usage error; `restore` 0 / 1 failure / 2 usage error; `check` 0 healthy / 1 unhealthy; `watch` exits 0 on Ctrl+C / SIGTERM; `preflight` 0 safe / 1 refused / 2 usage error; `install` 0 ok / 1 failed or refused / 2 usage error; `hotmount` 0 hot-mounted / 1 not installed, shape refused, or toggle failed / 2 usage error; `remote` 0 usable URL printed / 1 unavailable (host log missing, no or stale token, no reachable address); an unknown command exits 2.
 
 Note: `guard preflight` checks core-shadowing and the declared dsh engine requirement; peer-dependency compatibility is a future enhancement and is not checked yet.
+
+## Remote phone access
+
+`guard remote` prints the URL a phone can use to open the web UI of the running dsh host. It reads the host announce log, takes the **last** line that carries a launch token (`dsh web: http://127.0.0.1:3080/?token=...`), verifies the token against the running host (HTTP 303/200 = valid; 401 = the host restarted and the token is stale), then prints the Tailscale URL — with the LAN announce URL as fallback when Tailscale is unavailable (`tailscale ip -4`).
+
+- `--lan` — print only the LAN announce URL: skip the Tailscale probe.
+- `--show-token` — print the full launch token (human output masks it: first 6 characters plus `...`).
+- `--json` — machine-readable output (ok, url, tailscaleUrl, lanUrl, token, verified, at, logFile). The `token` field carries the full token, so do not paste this output into chats or logs.
+- `remote` needs no profile and writes nothing: one log read and one loopback HTTP verification request, nothing leaves your machine.
+
+The log path, port and Tailscale command are env-overridable contract points: `DSH_GUARD_HOST_LOG` (default `%APPDATA%\dsh-desktop\host-last.log`), `DSH_GUARD_PORT` (default `3080`) and `DSH_GUARD_TAILSCALE_CMD` (default `tailscale`).
+
+Exit: `remote` 0 = usable URL printed, 1 = unavailable (host log missing, no announce token, stale token, no reachable address).
+
+Try it against the real host while it runs:
+
+```sh
+guard remote --lan
+guard remote
+guard remote --json
+```
 
 ## Snapshots
 
@@ -97,6 +119,7 @@ guard runs **outside** the dsh host: no lib file imports a host runtime package,
 - When `guard` stops the host it only kills processes on port 3080 whose command line carries a dsh marker (`dsh`, `bin.js`, `deepseek`) — never an unrelated process squatting on the port.
 - `guard boot` and `guard restore` stop and start your **real** dsh host (port 3080). Run them only when you can accept a host restart — for example during an idle desktop window — and never from inside a session that the host itself serves.
 - Everything stays on your machine and no external network request is made, except for `guard preflight` and `guard install`, which fetch the package manifest from the npm registry (`guard install` also runs `dsh plugin add`, which downloads and installs the package). Hot-mounting is loopback-only: `guard install` may POST to the local dsh-market toggle at `http://127.0.0.1:3080` to activate a plain-insert or client-only plugin without a restart, and `guard hotmount` does the same on demand.
+- `guard remote` masks the launch token in human output (first 6 characters plus `...`); only `--show-token` and `--json` reveal it, so do not paste that output into chats or logs. It is read-only: one host-log read, one loopback HTTP verification, and a read-only `tailscale ip -4` probe — no external network, nothing written.
 
 ## Tests
 
