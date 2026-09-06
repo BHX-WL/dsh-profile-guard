@@ -18,7 +18,9 @@ import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from "node
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runPostInstallVerify } from "../lib/cli.js";
+import { runPostInstallVerify, runPostAddHotMount } from "../lib/cli.js";
+import { marketBaseUrl, marketOrigin } from "../lib/contract.js";
+import { profileDir } from "../lib/paths.js";
 
 const CLI = join(process.cwd(), "lib", "cli.js");
 
@@ -403,4 +405,114 @@ test("check wires the contract probe without changing the health exit code (I2)"
     assert.match(bad.stdout, /profile web:/);
     assert.doesNotMatch(bad.stderr, /host contract/);
   } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+// --- install post-add hot-mount wiring (task 4, dry through seams) ---
+// The production install branch spawns the real dsh bin + boots a real host,
+// so the CLI tests never reach it (DSH_GUARD_DRY_INSTALL=1 stops install
+// before the spawn). Exactly like runPostInstallVerify, the post-add hot-mount
+// flow therefore lives in an exported helper whose seams (canHotMount / mount /
+// verify, plus out/err writers) let the whole decision sequence be driven dry:
+// no patch is read from a real profile, no market POST is made, no host is
+// booted. The wires under test: shape-ok -> tryHotMount ok -> "install ok
+// (hot-mounted ...)" with NO restart verify; shape unsupported or a degraded
+// toggle -> printed reason -> restart verify (runPostInstallVerify) as the
+// fallback; DSH_GUARD_DRY_HOTMOUNT=1 -> "[dry] would hot-mount" and no POST.
+
+function capture() {
+  const buf = [];
+  return { buf, writer: (s) => { buf.push(s); }, text: () => buf.join("") };
+}
+
+const HOTPKG = "hotplug-pkg";
+
+test("install hot-mounts a shape-ok package after add and skips restart verify", async () => {
+  const out = capture(); const err = capture();
+  let mountCalls = 0, verifyCalls = 0, shapeArgs = null;
+  const r = await runPostAddHotMount({
+    profile: "web", pkg: HOTPKG, snapshotId: "S1",
+    canHotMount: async (pd, pkg) => { shapeArgs = { pd, pkg }; return { ok: true, via: "insert" }; },
+    mount: async (pkg, opts) => { mountCalls++; assert.equal(pkg, HOTPKG); assert.equal(opts.baseUrl, marketBaseUrl()); assert.equal(opts.origin, marketOrigin()); return { ok: true, state: "live", degraded: false }; },
+    verify: async () => { verifyCalls++; return { ok: true, snapshotId: "v1" }; },
+    out: out.writer, err: err.writer,
+  });
+  assert.equal(r.kind, "hot-mounted", JSON.stringify(r));
+  assert.equal(r.exitCode, 0);
+  assert.equal(shapeArgs.pkg, HOTPKG);
+  assert.equal(shapeArgs.pd, profileDir("web"));
+  assert.equal(mountCalls, 1);
+  assert.equal(verifyCalls, 0); // no restart verification on a live hot-mount
+  assert.ok(out.text().includes("install ok (hot-mounted " + HOTPKG + ", snapshot S1)"), out.text());
+  assert.equal(err.text(), "");
+});
+
+test("install falls back to restart verify when the hot-mount is degraded", async () => {
+  const out = capture(); const err = capture();
+  let mountCalls = 0, verifyArgs = null;
+  const r = await runPostAddHotMount({
+    profile: "web", pkg: HOTPKG, snapshotId: "S2",
+    canHotMount: async () => ({ ok: true, via: "insert" }),
+    mount: async () => { mountCalls++; return { ok: false, degraded: true, reason: "market toggle HTTP 502 for " + HOTPKG }; },
+    verify: async (o) => { verifyArgs = o; return { ok: true, snapshotId: "v2" }; },
+    out: out.writer, err: err.writer,
+  });
+  assert.equal(r.kind, "verify-ok", JSON.stringify(r));
+  assert.equal(r.exitCode, 0);
+  assert.equal(mountCalls, 1);
+  assert.deepEqual(verifyArgs, { profile: "web" }); // the runPostInstallVerify call shape
+  assert.ok(err.text().includes("hot-mount failed (market toggle HTTP 502 for hotplug-pkg); falling back to restart verification"), err.text());
+  assert.ok(out.text().includes("install ok (snapshot S2)"), out.text());
+});
+
+test("install skips hot-mount and verifies when the package shape is unsupported", async () => {
+  const out = capture(); const err = capture();
+  let mountCalls = 0, verifyCalls = 0;
+  const r = await runPostAddHotMount({
+    profile: "web", pkg: HOTPKG, snapshotId: "S3",
+    canHotMount: async () => ({ ok: false, reason: "bundle patch is not plain inserts; hot-mount only supports plain inserts - restart required" }),
+    mount: async () => { mountCalls++; return { ok: true }; },
+    verify: async () => { verifyCalls++; return { ok: true, snapshotId: "v3" }; },
+    out: out.writer, err: err.writer,
+  });
+  assert.equal(r.kind, "verify-ok", JSON.stringify(r));
+  assert.equal(r.exitCode, 0);
+  assert.equal(mountCalls, 0); // never POST when the shape cannot hot-mount
+  assert.equal(verifyCalls, 1);
+  assert.ok(err.text().includes("hot-mount unavailable (bundle patch is not plain inserts"), err.text());
+  assert.ok(err.text().includes("falling back to restart verification"), err.text());
+  assert.ok(out.text().includes("install ok (snapshot S3)"), out.text());
+});
+
+test("DSH_GUARD_DRY_HOTMOUNT=1 prints would-hot-mount and never POSTs", async () => {
+  const out = capture(); const err = capture();
+  let mountCalls = 0, verifyCalls = 0;
+  const r = await runPostAddHotMount({
+    profile: "web", pkg: HOTPKG, snapshotId: "S4",
+    env: { DSH_GUARD_DRY_HOTMOUNT: "1" },
+    canHotMount: async () => ({ ok: true, via: "insert" }),
+    mount: async () => { mountCalls++; return { ok: true, state: "live" }; },
+    verify: async () => { verifyCalls++; return { ok: true, snapshotId: "v4" }; },
+    out: out.writer, err: err.writer,
+  });
+  assert.equal(r.kind, "verify-ok", JSON.stringify(r)); // dry gate never claims a live mount
+  assert.equal(r.exitCode, 0);
+  assert.equal(mountCalls, 0); // no real market POST under the dry gate
+  assert.equal(verifyCalls, 1); // the plugin was really added -> restart verify still runs
+  assert.ok(out.text().includes("[dry] would hot-mount hotplug-pkg"), out.text());
+  assert.ok(out.text().includes("install ok (snapshot S4)"), out.text());
+});
+
+test("a failed fallback verification surfaces as exit 1 with the outcome message", async () => {
+  const out = capture(); const err = capture();
+  const r = await runPostAddHotMount({
+    profile: "web", pkg: HOTPKG, snapshotId: "S5",
+    canHotMount: async () => ({ ok: true, via: "insert" }),
+    mount: async () => ({ ok: false, degraded: true, reason: "market toggle request failed for " + HOTPKG + ": ECONNREFUSED" }),
+    verify: async () => ({ ok: false, error: "host did not become ready" }),
+    out: out.writer, err: err.writer,
+  });
+  assert.equal(r.kind, "verify-failed", JSON.stringify(r));
+  assert.equal(r.exitCode, 1);
+  assert.ok(err.text().includes("hot-mount failed (market toggle request failed for hotplug-pkg: ECONNREFUSED); falling back to restart verification"), err.text());
+  assert.ok(err.text().includes("install ok but boot verification failed: host did not become ready"), err.text());
 });
