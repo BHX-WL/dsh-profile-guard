@@ -20,3 +20,11 @@ test("auth-locked host (401) counts healthy", async () => {
 test("nothing listening is unhealthy", async () => {
   assert.equal(await isHostHealthy("http://127.0.0.1:1", 300), false);
 });
+
+test("server that accepts but never responds is unhealthy (probe timeout)", async () => {
+  const srv = createServer(() => { /* accept, never respond */ });
+  await new Promise((r) => srv.listen(0, r));
+  const port = srv.address().port;
+  try { assert.equal(await isHostHealthy(`http://127.0.0.1:${port}`, 200), false); }
+  finally { srv.close(); }
+});
