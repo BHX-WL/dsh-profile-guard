@@ -78,3 +78,34 @@ test("checkHostContract reports C5 drift when observed fail texts differ", () =>
   const r = contract.checkHostContract({ failTexts: ["new failure wording"] });
   assert.ok(r.some((x) => x.name === "C5-fail-texts" && x.ok === false && x.observed === "new failure wording"));
 });
+
+test("market bridge contract defaults derive from one base string", () => {
+  assert.equal(contract.marketTogglePath(), "/dsh-market/toggle");
+  assert.equal(contract.marketBaseUrl(), "http://127.0.0.1:3080");
+  // Spike: the market sameOrigin gate compares the Origin host byte-for-byte
+  // with the request host (localhost != 127.0.0.1 would 403), so the default
+  // Origin must come from the SAME string as marketBaseUrl().
+  assert.equal(contract.marketOrigin(), contract.marketBaseUrl());
+  assert.equal(contract.marketOrigin(), "http://127.0.0.1:3080");
+  assert.ok(!contract.marketBaseUrl().endsWith("/"));
+});
+
+test("market bridge env overrides take effect; baseUrl trailing slashes are stripped", () => {
+  const saved = { ...process.env };
+  try {
+    process.env.DSH_GUARD_MARKET_BASE = "http://127.0.0.1:9999///";
+    process.env.DSH_GUARD_MARKET_TOGGLE_PATH = "/custom/toggle";
+    // no explicit ORIGIN override -> Origin follows the overridden baseUrl
+    assert.equal(contract.marketBaseUrl(), "http://127.0.0.1:9999");
+    assert.equal(contract.marketTogglePath(), "/custom/toggle");
+    assert.equal(contract.marketOrigin(), contract.marketBaseUrl());
+    // an explicit ORIGIN override wins over the derived default
+    process.env.DSH_GUARD_MARKET_ORIGIN = "http://localhost:9999";
+    assert.equal(contract.marketOrigin(), "http://localhost:9999");
+  } finally {
+    for (const k of Object.keys(saved)) process.env[k] = saved[k];
+    // also delete keys this test added: --test-isolation=none shares one process
+    // across files, and a leaked DSH_GUARD_* override would break default tests.
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  }
+});
