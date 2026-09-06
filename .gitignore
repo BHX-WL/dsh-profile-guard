@@ -1,0 +1,7 @@
+.worktrees/
+node_modules/
+*.log
+.superpowers/
+crash-*/
+restore-report-*.md
+last-report.md
