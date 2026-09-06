@@ -43,10 +43,12 @@ Every command accepts `--profile <name>` (default: `web`).
 | `guard restore <id> [--no-auto-restart] [--profile <name>]` | Roll the profile back to a `healthy` snapshot. Stops the host on port 3080 if one is running; starts it again unless `--no-auto-restart` is given. |
 | `guard check [--profile <name>]` | Read-only health check of the profile. Exit 0 = healthy, exit 1 = problems found. |
 | `guard watch [--profile <name>]` | Resident auto-snapshot: watch `package.json` / `pnpm-lock.yaml` and snapshot automatically when they change. Stop with Ctrl+C or SIGTERM. |
+| `guard preflight <pkg> [--force]` | Check a package before installing: refuses packages whose prod dependencies shadow the host @deepseek-ai namespace, or whose dsh engine/peer requirements the host cannot meet. Exit 0 = safe, 1 = refused, `--force` overrides the core-shadow check. |
+| `guard install <pkg> [--force] [--no-boot]` | Preflight → snapshot → `dsh plugin add` → boot verification (auto-rollback on failure). One command, closed loop. |
 
 Running `guard` with no arguments (or `guard help`) prints this usage.
 
-Exit codes: `boot` 0 on success (already running is a success) / 1 on failure; `snapshot` and `list` 0; `show` 0 found / 1 not found / 2 usage error; `restore` 0 / 1 failure / 2 usage error; `check` 0 healthy / 1 unhealthy; `watch` exits 0 on Ctrl+C / SIGTERM; an unknown command exits 2.
+Exit codes: `boot` 0 on success (already running is a success) / 1 on failure; `snapshot` and `list` 0; `show` 0 found / 1 not found / 2 usage error; `restore` 0 / 1 failure / 2 usage error; `check` 0 healthy / 1 unhealthy; `watch` exits 0 on Ctrl+C / SIGTERM; `preflight` 0 safe / 1 refused / 2 usage error; `install` 0 ok / 1 failed or refused / 2 usage error; an unknown command exits 2.
 
 ## Snapshots
 
@@ -77,13 +79,21 @@ Each tool protects its own install path, and they do not overlap:
 
 `guard` only reads and writes `$DSH_HOME/guards/<profile>/` and the profile's own `package.json`. It never touches dshmarket's or dsh-desktop's state, so the three run side by side without interfering.
 
+## Host contract compatibility
+
+guard runs **outside** the dsh host: no lib file imports a host runtime package, so an official host update cannot break guard through an import mismatch — the failure mode that breaks plugins living inside the host. What guard does rely on is a small set of disk/CLI contract points: the host boot marker, the boot-failure texts, the `dsh plugin` CLI shape, and the profile manifest schema. Three rules keep those points from going stale silently:
+
+- **Zero runtime coupling.** No lib file imports any `@deepseek-ai/*` module. guard reads the host only from the outside — it resolves the installed dsh bin, reads its version, and reads profile manifests. When the host is missing or unreadable, guard degrades to the checks it can still prove locally and reports the host version as unknown rather than guessing.
+- **Contract constants are env-overridable.** The marker and failure-text constants live in a single module, `lib/contract.js`, and each one can be overridden with an environment variable — `DSH_GUARD_BOOT_MARKER`, `DSH_GUARD_AUTH_MARKER`, `DSH_GUARD_NO_OPEN`, `DSH_GUARD_FAIL_TEXT`. If an official update renames a marker or a failure text, adapting is a configuration change, not a code change.
+- **No silent degradation.** guard never guesses on a contract point it cannot confirm: a profile manifest that cannot be read is reported as a problem, never treated as healthy; a boot failure whose log shows no known plugin-failure text is **not** auto-rolled back — guard reports the failure without rolling back (a wrong rollback is worse than a missed one); and every preflight warning and refusal is printed, never swallowed.
+
 ## Safety
 
 - `guard` reads and writes only `$DSH_HOME/guards/` and the target profile's `package.json`. Everything else is read-only.
 - Snapshots and reports contain no credentials: free-text fields in restore reports are scrubbed (tokens, authorization headers, cookies, passwords) before they reach disk.
 - When `guard` stops the host it only kills processes on port 3080 whose command line carries a dsh marker (`dsh`, `bin.js`, `deepseek`) — never an unrelated process squatting on the port.
 - `guard boot` and `guard restore` stop and start your **real** dsh host (port 3080). Run them only when you can accept a host restart — for example during an idle desktop window — and never from inside a session that the host itself serves.
-- Pure local tool: it makes no network requests.
+- Everything stays on your machine and no network request is made, except for `guard preflight` and `guard install`, which fetch the package manifest from the npm registry (`guard install` also runs `dsh plugin add`, which downloads and installs the package).
 
 ## Tests
 
@@ -101,11 +111,15 @@ Run against a real profile when the host is idle:
 guard check --profile web
 guard snapshot --profile web --reason "first smoke"
 guard list --profile web
+guard preflight dsh-better-edit --profile web
+guard preflight @deepseek-ai/dsh-tools --profile web
 ```
 
 `guard check` prints `profile web: healthy`, or the concrete problems found; `guard snapshot` prints the id it created; `guard list` then shows that snapshot as `[pending]` with the note `(first smoke)`.
 
-`guard boot` — which restarts the real host — is intentionally not listed here: run it yourself, during an idle desktop window, and never from inside a session that the host serves.
+`guard preflight` checks a package against the host before anything is installed: `guard preflight dsh-better-edit --profile web` prints `guard: preflight ok for dsh-better-edit (host <version>)` and exits 0 (its prod dependencies do not shadow the host `@deepseek-ai` namespace and its engine/peer requirements are met, or none are declared); `guard preflight @deepseek-ai/dsh-tools --profile web` exits 1 — `@deepseek-ai/dsh-tools` is itself a core package, so installing it as a plugin would shadow the host `@deepseek-ai` namespace.
+
+`guard install <pkg>` and `guard boot` are intentionally not listed here: `guard install` really runs `dsh plugin add` and installs the package, then boot-verifies the new plugin (which may stop and restart your real host), and `guard boot` restarts the host by definition. Run them yourself, during an idle desktop window, and never from inside a session that the host serves.
 
 ## License
 
