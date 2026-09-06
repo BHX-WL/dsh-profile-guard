@@ -62,6 +62,21 @@ test("toggle 200 without an activation entry for the package degrades", async ()
   } finally { srv.close(); }
 });
 
+test("toggle 200 with ok:false degrades and surfaces the market reason", async () => {
+  // hotMount itself failed/refused (setPluginEnabled ok=false): the market
+  // returns ok:false with a reason - degrade and pass that reason through so
+  // the user sees why the restart fallback happened.
+  const srv = await start((req, res) => json(res, { ok: false, name: PKG, reason: "only plain-insert patches can hot-mount" }));
+  const baseUrl = baseUrlOf(srv);
+  try {
+    const r = await tryHotMount(PKG, { baseUrl, origin: baseUrl, timeoutMs: 3000 });
+    assert.equal(r.ok, false);
+    assert.equal(r.degraded, true);
+    assert.equal(r.state, undefined);
+    assert.match(r.reason, /only plain-insert patches can hot-mount/);
+  } finally { srv.close(); }
+});
+
 test("toggle 403 (untrusted origin) degrades", async () => {
   const srv = await start((req, res) => {
     res.statusCode = 403;
