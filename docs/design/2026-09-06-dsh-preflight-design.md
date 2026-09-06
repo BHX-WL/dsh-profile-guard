@@ -2,7 +2,7 @@
 title: dsh-profile-guard preflight 设计文档（深度兼容预检门）
 date: 2026-09-06
 status: draft-for-user-review
-version: 0.1
+version: 0.2
 category: design
 project: G:\deepseek\opensource\dsh-profile-guard
 ---
@@ -106,6 +106,34 @@ guard install <pkg> [--force] [--registry <url>]     # 闭环：preflight → sn
 1. install 的 `dsh plugin add` spawn 失败语义：是否自动建议 restore（不自动执行，尊重用户）；
 2. `bootOnce` 装后验证在无 healthy 快照时（全新 profile）的行为（沿用 ① 语义：不循环回滚）；
 3. 是否支持 `guard install` 的 `--no-boot`（只装不验证）——默认真实验证，逃生口待用户需时加。
+
+## 11.5 兼容性与官方破坏性更新防护（项目级硬约束，覆盖 ①+② 全部模块）
+
+**要求来源**：用户复核规格时提出——官方（@deepseek-ai/dsh）破坏性更新后插件不得直接崩溃。
+
+**审计结论（2026-09-06）**：guard 全部 lib 模块**零运行时 import 宿主包**（不 require/import 任何 @deepseek-ai/* 或 cordis 运行时）——官方升级导致 import 错配/SyntaxError 崩溃的路径天然不存在（tool-lens 事故正是宿主内插件的死法，guard 宿主外免疫）。但 guard 依赖 6 个**磁盘/CLI 契约点**，官方破坏性更新改这些点时，guard 不会崩而是**静默行为错**（更危险）：误判在线、快照写错位置、回滚不触发、preflight 漏检。
+
+### 契约点清单（升级宿主时逐项核对）
+| # | 契约点 | guard 用法 | 官方改动风险 |
+|---|---|---|---|
+| C1 | CLI 入口 `<dsh>/lib/bin.js web --no-open` | host.js spawnHost 拉宿主 | 入口路径/参数改名 |
+| C2 | 在线 marker `__DSH_BOOT__` / 401 "authentic" | probe.js 判宿主在线 | marker 文本变化 → 误判离线/在线 |
+| C3 | manifest schema `dsh.profile.bundles` + dependencies | snapshot/rollback/watch 读写 | schema 字段改名/移动 |
+| C4 | cordis.patch.yml 顶层 `- insert:` + `name:` | check.js dup-id 检测 | patch 格式演进 |
+| C5 | boot 失败文本 `plugin tree failed` 等 | boot.js isPluginFailure 触发回滚 | 错误措辞变化 → 回滚永不触发 |
+| C6 | 宿主版本号语义（0.1.2-rc.1） | preflight engines/peer 比对 | 版本格式/频道变化 |
+
+### 防护策略（每条落为代码要求，测试覆盖）
+1. **防御性读取（所有 C3/C4）**：manifest/patch 解析全部容错——读不到 `dsh.profile.bundles` 按空处理并 warn，绝不 throw；schema 未知字段**保留原样写回**（不做破坏性重写）。已有 readManifest 返 null 语义，扩展：任何结构假设（`.dsh.profile` 存在）都经可选链 + 默认值。
+2. **降级而非静默（C2/C5）**：`guard check` 增加"契约探测"段——启动时探测 6 个契约点，任何一点与预期不符 → 输出 `[warn] host contract C<n> changed: <observed>` 到报告/stderr，**绝不静默继续**。C5 失败文本探测不到时，boot 失败走保守路径：不自动回滚、打印"无法判定是否插件故障（宿主错误文本可能已变）"、提示用户看日志（宁可少自动回滚，不可误回滚）。
+3. **契约常数集中 + 可覆写**：C1/C2/C5 的字符串常量集中到 `lib/contract.js` 单文件，支持 env 覆写（`DSH_GUARD_BOOT_MARKER`、`DSH_GUARD_FAIL_TEXT` 等），官方更新后无需改代码即可适配。
+4. **版本门（C6）**：preflight engines 比对用宽容 semver（未知频道/预发布按"无声明放行"语义，不误杀）；宿主版本读不到 → 所有依赖版本的判定走"unknown → 不拒绝"（与 market 同款：absence of claim is not a verdict）。
+5. **零运行时耦合硬约束**：lib 任何文件不得 import @deepseek-ai/* 运行时包（git hook/CI 检查可在测试中实现：扫描 lib/*.js 的 import 语句断言无 @deepseek-ai 前缀——已审计现状满足）。
+6. **防崩溃兜底**：guard 任何内部异常（含读宿主文件 EACCES/格式崩坏）都被顶层 catch 捕获 → 打印可读错误 + 退出码，绝不裸 stack trace 退出；install/boot 在 preflight/快照失败时中止动作但不破坏 profile 现场（① 的 crash 备份兜底）。
+
+### 测试要求
+- `test/contract.test.js`：构造"宿主契约已变"的 fixture（改 marker 文本/改 manifest schema/改失败文本/无版本）→ 断言 guard 不崩、行为降级正确（warn 输出、不误回滚、不误拒绝）。
+- 现有测试全部沿用（契约默认值下绿）；契约探测段为纯增量。
 
 ## 12. 后续待命（非本次范围）
 
