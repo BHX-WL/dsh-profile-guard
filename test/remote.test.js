@@ -121,3 +121,36 @@ test("readHostLog returns the file text, and null for missing or unreadable path
     rmSync(file, { force: true });
   }
 });
+
+// --- T0 minor additions (task-2 wrap-up): pin the verify-variant semantics the
+// T0 review asked for, against the frozen buildRemoteInfo contract ---
+test("buildRemoteInfo verify === false marks the token stale explicitly", async () => {
+  const info = await buildRemoteInfo({ logText: LOG_MULTI, tailscaleIp: "100.67.129.65", verify: false });
+  assert.equal(info.ok, false);
+  assert.equal(info.verified, false);
+  assert.equal(info.error, "token stale (host restarted?)");
+  assert.equal(info.url, "http://100.67.129.65:3080/?token=NEWtoken-XYZ"); // URL still reported
+});
+
+test("buildRemoteInfo with verify omitted hands over the URL construct-only (ok, verified:false)", async () => {
+  const info = await buildRemoteInfo({ logText: LOG_MULTI, tailscaleIp: "100.67.129.65" });
+  assert.equal(info.ok, true);
+  assert.equal(info.verified, false);
+  assert.equal(info.error, undefined);
+  assert.equal(info.url, "http://100.67.129.65:3080/?token=NEWtoken-XYZ");
+});
+
+test("buildRemoteInfo a throwing verify resolves not-verified (module catch, never propagates)", async () => {
+  const info = await buildRemoteInfo({
+    logText: LOG_MULTI,
+    tailscaleIp: "100.67.129.65",
+    verify: async () => { throw new Error("verification exploded"); },
+  });
+  // The module catches the throw itself (status null -> not verified), so the
+  // cli layer never sees it; fetchStatus in cli resolves null on network errors
+  // rather than throwing, keeping this path unreachable in production wiring.
+  assert.equal(info.ok, false);
+  assert.equal(info.verified, false);
+  assert.equal(info.error, "token stale (host restarted?)");
+});
+

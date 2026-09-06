@@ -644,3 +644,120 @@ test("hotmount degraded market toggle exits 1 with the reason", async () => {
     } finally { srv.close(); }
   } finally { rmSync(h, { recursive: true, force: true }); }
 });
+
+// --- guard remote command (task 2, phone-usable URL from host-last.log) ---
+// Real child process like every other CLI test; the log path, port and tailscale
+// binary are all env-pointed at LOCAL fixtures/stubs so no test touches the real
+// host-last.log, a real tailscale, or port 3080:
+//   - DSH_GUARD_HOST_LOG -> a throwaway fixture log file in the temp dir
+//   - DSH_GUARD_PORT     -> the local stub server's port (announce + verify)
+//   - DSH_GUARD_TAILSCALE_CMD -> a nonexistent binary, so the real tailscale is
+//     never spawned (the degrade-to-LAN path is exercised via its failure)
+// Human output must desensitise the token to its first 6 chars + "...": the URL
+// line masks the token inside the query too (printing a full-token URL while a
+// masked token line sat next to it would make the masking theatre).
+const REMOTE_LOG = (port, token) => [
+  "[dsh-desktop] 2026-09-07T10:00:00 boot ok",
+  "dsh web: http://127.0.0.1:" + port + "/", // legacy token-less announce line
+  "dsh web: http://127.0.0.1:" + port + "/?token=OLDtok_1 (LAN: http://127.0.0.1:" + port + "/?token=OLDtok_1)",
+  "dsh web: http://127.0.0.1:" + port + "/?token=" + token + " (LAN: http://127.0.0.1:" + port + "/?token=" + token + ")",
+].join("\n") + "\n";
+const REMOTE_TOKEN = "TokTes_Remote_1234567890"; // 6-prefix: TokTes
+const NO_TAILSCALE = "no-such-tailscale-binary-xyz";
+
+function remoteStub(statusCode) {
+  return new Promise((resolve) => {
+    const srv = createServer((req, res) => { res.statusCode = statusCode; res.end(statusCode === 401 ? "dsh web authentication required" : ""); });
+    srv.listen(0, "127.0.0.1", () => resolve(srv));
+  });
+}
+
+test("remote prints a desensitised phone URL and verified status (human)", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-rm-")); const srv = await remoteStub(303);
+  const port = srv.address().port; const log = join(h, "host-last.log");
+  try {
+    writeFileSync(log, REMOTE_LOG(port, REMOTE_TOKEN));
+    const r = await run(["remote", "--lan"], { DSH_GUARD_HOST_LOG: log, DSH_GUARD_PORT: String(port) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(r.stdout.includes("guard: phone URL: http://127.0.0.1:" + port + "/?token=TokTes..."), r.stdout);
+    assert.ok(r.stdout.includes("guard: token: TokTes..."), r.stdout);
+    assert.match(r.stdout, /verified: yes/);
+    assert.ok(!r.stdout.includes(REMOTE_TOKEN), "full token must not leak in human mode: " + r.stdout);
+  } finally { srv.close(); rmSync(h, { recursive: true, force: true }); }
+});
+
+test("remote --json includes the full token, URLs and log file", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-rmj-")); const srv = await remoteStub(303);
+  const port = srv.address().port; const log = join(h, "host-last.log");
+  try {
+    writeFileSync(log, REMOTE_LOG(port, REMOTE_TOKEN));
+    const r = await run(["remote", "--lan", "--json"], { DSH_GUARD_HOST_LOG: log, DSH_GUARD_PORT: String(port) });
+    assert.equal(r.code, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.equal(o.ok, true);
+    assert.equal(o.verified, true);
+    assert.equal(o.token, REMOTE_TOKEN);
+    assert.equal(o.url, "http://127.0.0.1:" + port + "/?token=" + REMOTE_TOKEN);
+    assert.equal(o.lanUrl, o.url);
+    assert.equal(o.tailscaleUrl, undefined);
+    assert.equal(o.logFile, log);
+    assert.equal(typeof o.at, "string");
+  } finally { srv.close(); rmSync(h, { recursive: true, force: true }); }
+});
+
+test("remote --show-token prints the full token", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-rmt-")); const srv = await remoteStub(303);
+  const port = srv.address().port; const log = join(h, "host-last.log");
+  try {
+    writeFileSync(log, REMOTE_LOG(port, REMOTE_TOKEN));
+    const r = await run(["remote", "--lan", "--show-token"], { DSH_GUARD_HOST_LOG: log, DSH_GUARD_PORT: String(port) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(r.stdout.includes(REMOTE_TOKEN), r.stdout);
+    assert.ok(r.stdout.includes("http://127.0.0.1:" + port + "/?token=" + REMOTE_TOKEN), r.stdout);
+  } finally { srv.close(); rmSync(h, { recursive: true, force: true }); }
+});
+
+test("remote degrades to the LAN URL when the tailscale probe fails", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-rmd-")); const srv = await remoteStub(303);
+  const port = srv.address().port; const log = join(h, "host-last.log");
+  try {
+    writeFileSync(log, REMOTE_LOG(port, REMOTE_TOKEN));
+    const r = await run(["remote"], { DSH_GUARD_HOST_LOG: log, DSH_GUARD_PORT: String(port), DSH_GUARD_TAILSCALE_CMD: NO_TAILSCALE });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stderr, /tailscale/i); // degrade must not be silent
+    assert.ok(r.stdout.includes("http://127.0.0.1:" + port + "/?token=TokTes..."), r.stdout);
+  } finally { srv.close(); rmSync(h, { recursive: true, force: true }); }
+});
+
+test("remote exits 1 with a stale-token hint when verification returns 401", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-rms-")); const srv = await remoteStub(401);
+  const port = srv.address().port; const log = join(h, "host-last.log");
+  try {
+    writeFileSync(log, REMOTE_LOG(port, REMOTE_TOKEN));
+    const r = await run(["remote", "--lan"], { DSH_GUARD_HOST_LOG: log, DSH_GUARD_PORT: String(port) });
+    assert.equal(r.code, 1, "stderr=" + r.stderr);
+    assert.match(r.stderr, /stale|restarted/i);
+  } finally { srv.close(); rmSync(h, { recursive: true, force: true }); }
+});
+
+test("remote exits 1 when the host log is missing", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-rml-"));
+  try {
+    const r = await run(["remote"], { DSH_GUARD_HOST_LOG: join(h, "no-such-host-last.log"), DSH_GUARD_PORT: "3080", DSH_GUARD_TAILSCALE_CMD: NO_TAILSCALE });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /host log not found/i);
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
+test("remote --json missing host log exits 1 with a parseable error object", async () => {
+  const h = mkdtempSync(join(tmpdir(), "guard-cli-rmlj-"));
+  try {
+    const r = await run(["remote", "--json"], { DSH_GUARD_HOST_LOG: join(h, "no-such-host-last.log"), DSH_GUARD_PORT: "3080", DSH_GUARD_TAILSCALE_CMD: NO_TAILSCALE });
+    assert.equal(r.code, 1);
+    const o = JSON.parse(r.stdout);
+    assert.equal(o.ok, false);
+    assert.match(o.error, /host log not found/i);
+    assert.equal(o.logFile, join(h, "no-such-host-last.log"));
+  } finally { rmSync(h, { recursive: true, force: true }); }
+});
+
