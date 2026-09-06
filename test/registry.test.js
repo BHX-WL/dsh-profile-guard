@@ -44,3 +44,17 @@ test("fetchManifest times out with readable error", async () => {
     await assert.rejects(fetchManifest("slow-pkg", { registry: `http://127.0.0.1:${port}`, timeoutMs: 300 }), /timeout|timed out/i);
   } finally { srv.close(); }
 });
+
+test("fetchManifest network failure carries cause code and url", async () => {
+  const srv = createServer(() => {});
+  await new Promise((r) => srv.listen(0, r));
+  const port = srv.address().port;
+  await new Promise((r) => srv.close(r)); // port now refuses connections
+  await assert.rejects(
+    fetchManifest("refused-pkg", { registry: `http://127.0.0.1:${port}`, timeoutMs: 2000 }),
+    (err) =>
+      err.message.startsWith("guard: registry fetch failed for refused-pkg") &&
+      err.message.includes(`http://127.0.0.1:${port}`) &&
+      /ECONNREFUSED/i.test(err.message)
+  );
+});
