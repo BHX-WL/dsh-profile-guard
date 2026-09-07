@@ -2,7 +2,7 @@
   "name": "dsh-profile-guard",
   "version": "0.4.0",
   "private": false,
-  "description": "Install-crash insurance for the dsh CLI plugin path: snapshot healthy profiles, auto-rollback when a plugin breaks the host boot.",
+  "description": "Safety net for the dsh CLI plugin path: preflight installs, snapshot healthy profiles, auto-rollback on boot failure, hot-mount plain-insert plugins without restart, and one-command phone access URL. (① install insurance ② preflight gate ③ hot-mount ④ remote)",
   "type": "module",
   "scripts": {
     "test": "node --test test/**/*.test.js"
@@ -19,6 +19,22 @@
     "dsh",
     "backup",
     "rollback",
-    "guard"
-  ]
+    "guard",
+    "preflight",
+    "compatibility",
+    "hotmount",
+    "remote",
+    "mobile"
+  ],
+  "files": [
+    "lib",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BHX-WL/dsh-profile-guard.git"
+  },
+  "homepage": "https://github.com/BHX-WL/dsh-profile-guard#readme"
 }

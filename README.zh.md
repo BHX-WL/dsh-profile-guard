@@ -23,7 +23,7 @@ npm install -g dsh-profile-guard
 **从 git clone 运行** —— 无需安装，直接经 Node 运行：
 
 ```sh
-git clone <this-repository> dsh-profile-guard
+git clone https://github.com/BHX-WL/dsh-profile-guard.git dsh-profile-guard
 cd dsh-profile-guard
 node lib/cli.js check
 ```

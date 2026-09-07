@@ -681,6 +681,7 @@ test("remote prints a desensitised phone URL and verified status (human)", async
     assert.equal(r.code, 0, r.stderr);
     assert.ok(r.stdout.includes("guard: phone URL: http://127.0.0.1:" + port + "/?token=TokTes..."), r.stdout);
     assert.ok(r.stdout.includes("guard: token: TokTes..."), r.stdout);
+    assert.ok(r.stdout.includes("guard: at: "), "human output has time line");
     assert.match(r.stdout, /verified: yes/);
     assert.ok(!r.stdout.includes(REMOTE_TOKEN), "full token must not leak in human mode: " + r.stdout);
   } finally { srv.close(); rmSync(h, { recursive: true, force: true }); }
