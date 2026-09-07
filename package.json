@@ -8,7 +8,7 @@
     "test": "node --test test/**/*.test.js"
   },
   "bin": {
-    "guard": "./lib/cli.js"
+    "guard": "lib/cli.js"
   },
   "engines": {
     "node": ">=20"
@@ -34,7 +34,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/BHX-WL/dsh-profile-guard.git"
+    "url": "git+https://github.com/BHX-WL/dsh-profile-guard.git"
   },
   "homepage": "https://github.com/BHX-WL/dsh-profile-guard#readme",
   "dependencies": {}
