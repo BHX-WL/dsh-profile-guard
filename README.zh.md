@@ -112,6 +112,22 @@ guard 运行在 dsh 宿主**之外**：lib 任何文件都不 import 宿主运�
 - **契约常数可用 env 覆写。** marker 与失败文本常量集中在单一模块 `lib/contract.js`，每个都能用环境变量覆写——`DSH_GUARD_BOOT_MARKER`、`DSH_GUARD_AUTH_MARKER`、`DSH_GUARD_NO_OPEN`、`DSH_GUARD_FAIL_TEXT`。官方更新改了某个 marker 或失败文本时，适配只是改配置，不是改代码。market 热挂 toggle 的键在同一模块、同样可用 env 覆写——`DSH_GUARD_MARKET_BASE`、`DSH_GUARD_MARKET_TOGGLE_PATH`、`DSH_GUARD_MARKET_ORIGIN`。
 - **绝不静默降级。** guard 从不在无法确认的契约点上猜测：读不到的 profile manifest 被如实报告为问题，绝不当成健康；启动日志中找不到任何已知插件失败文本的启动失败**不会**自动回滚——guard 报告失败但不回滚（错误回滚比漏掉回滚更糟）；preflight 的每条警告与拒绝都会打印，绝不吞掉。
 
+## 要求、依赖与冲突
+
+**`guard` 需要什么（要求）：**
+
+- **Node.js ≥ 20** —— 唯一硬性要求（已声明在 `package.json` 的 `engines`）。运行时零 npm 依赖：发布包不含任何第三方模块，`npm install` 无可下载内容，供应链面仅剩 Node 本身。
+- **一套 dsh 安装** —— 仅对作用于宿主的命令（`boot`、`install`、`hotmount`、`remote`）需要；`check`、`snapshot`、`list`、`show`、`restore` 只读磁盘上的 profile，不需要宿主。定位不到 dsh CLI 时 `guard` 会如实报告而非猜测。
+- **可选、自动降级：** `guard remote` 的 Tailscale 手机 URL 需要 `tailscale`（不可用时带提示回退 LAN URL）；`install` 热挂需要运行中的 dsh-market ≥ 1.44（toggle 路由缺失或变化时回退到重启验证）。
+
+**依赖：** 运行时为零——这是刻意的并有测试守护（测试扫描 `lib/`，任一文件 import `@deepseek-ai/*` 或 `cordis` 运行时包即失败）。开发期工具仅用 Node 内置测试运行器。
+
+**冲突与如何避免：**
+
+- `guard` **不是** profile bundle 插件：不携带 `dsh.bundle.patch`、永不进入 `dsh.profile.bundles`、不声明任何 `@deepseek-ai/*` peer——因此不会与其它插件的 loader entry 撞车、不会遮蔽宿主命名空间、也不会像宿主内插件那样在宿主更新时崩掉。**不要用 `dsh plugin add` 安装它**——它是独立 CLI（npm 全局或 git clone）。
+- 它不触碰 dshmarket 与 dsh-desktop 的状态（见上方关系表），三者并存互不干扰。
+- `guard remote` 只读 `host-last.log`（由 dsh-desktop 写入）；从不启动、停止或重配 tailscale serve 隧道或任何反向代理。
+
 ## 安全说明
 
 - `guard` 只读写 `$DSH_HOME/guards/` 与目标 profile 的 `package.json`，其余一律只读。

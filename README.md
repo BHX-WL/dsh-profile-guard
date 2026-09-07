@@ -112,6 +112,22 @@ guard runs **outside** the dsh host: no lib file imports a host runtime package,
 - **Contract constants are env-overridable.** The marker and failure-text constants live in a single module, `lib/contract.js`, and each one can be overridden with an environment variable — `DSH_GUARD_BOOT_MARKER`, `DSH_GUARD_AUTH_MARKER`, `DSH_GUARD_NO_OPEN`, `DSH_GUARD_FAIL_TEXT`. If an official update renames a marker or a failure text, adapting is a configuration change, not a code change. The market hot-mount toggle keys live in the same module and stay env-overridable the same way — `DSH_GUARD_MARKET_BASE`, `DSH_GUARD_MARKET_TOGGLE_PATH`, `DSH_GUARD_MARKET_ORIGIN`.
 - **No silent degradation.** guard never guesses on a contract point it cannot confirm: a profile manifest that cannot be read is reported as a problem, never treated as healthy; a boot failure whose log shows no known plugin-failure text is **not** auto-rolled back — guard reports the failure without rolling back (a wrong rollback is worse than a missed one); and every preflight warning and refusal is printed, never swallowed.
 
+## Requirements, dependencies & conflicts
+
+**What `guard` needs (requirements):**
+
+- **Node.js ≥ 20** — the only hard requirement (declared in `package.json` `engines`). No runtime npm dependencies: the shipped package pulls in zero third-party modules, so `npm install` has nothing to download and there is no supply-chain surface beyond Node itself.
+- **A dsh installation** — only for the commands that act on a host (`boot`, `install`, `hotmount`, `remote`). `check`, `snapshot`, `list`, `show`, `restore` read the profile on disk and need no host. If the dsh CLI cannot be located, `guard` reports it instead of guessing.
+- **Optional, degrade automatically:** `tailscale` for a Tailscale phone URL in `guard remote` (falls back to the LAN URL with a note when unavailable); a running dsh-market ≥ 1.44 for `install` hot-mounting (falls back to a restart verification when the toggle route is missing or changed).
+
+**Dependencies:** none at runtime — this is deliberate and test-enforced (a test scans `lib/` and fails if any file imports an `@deepseek-ai/*` or `cordis` runtime package). Dev-time tooling is Node's built-in test runner only.
+
+**Conflicts & how it stays clear of them:**
+
+- `guard` is **not** a profile bundle plugin: it ships no `dsh.bundle.patch`, never enters `dsh.profile.bundles`, and declares no `@deepseek-ai/*` peer. It therefore cannot collide with another plugin's loader entry, shadow the host namespace, or break on a host update the way in-host plugins can. Do not install it with `dsh plugin add` — it is a standalone CLI (npm global or git clone).
+- It does not touch dshmarket's or dsh-desktop's state (see the relation table above), so those three tools coexist without interference.
+- `guard remote` reads `host-last.log` (written by dsh-desktop) read-only; it never starts, stops or reconfigures the tailscale serve tunnel or any reverse proxy.
+
 ## Safety
 
 - `guard` reads and writes only `$DSH_HOME/guards/` and the target profile's `package.json`. Everything else is read-only.

@@ -36,5 +36,6 @@
     "type": "git",
     "url": "https://github.com/BHX-WL/dsh-profile-guard.git"
   },
-  "homepage": "https://github.com/BHX-WL/dsh-profile-guard#readme"
+  "homepage": "https://github.com/BHX-WL/dsh-profile-guard#readme",
+  "dependencies": {}
 }
